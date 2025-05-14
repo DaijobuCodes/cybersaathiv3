@@ -1,0 +1,14 @@
+# CyberSaathi Project Dependencies
+firebase-admin==6.3.0
+python-dotenv==1.0.1
+requests==2.31.0
+beautifulsoup4==4.12.3
+markdown==3.5.2
+argparse==1.4.0
+colorama==0.4.6
+tqdm==4.66.2
+python-dateutil==2.8.2
+ollama==0.1.7  # Using llama3.2:3b model instead of llama3:8b
+flask==2.3.3   # Updated for Python 3.12 compatibility
+werkzeug==2.3.7 # Pinned version compatible with Flask 2.3.3
+jinja2==3.1.2  # Ensuring compatible Jinja2 version 

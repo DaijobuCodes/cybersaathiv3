@@ -1,0 +1,1133 @@
+"""
+CyberSaathi Unified Workflow
+
+This script provides a complete end-to-end workflow for CyberSaathi:
+1. Scraping cybersecurity articles from multiple sites
+2. Exporting data to markdown format
+3. Summarizing articles using Ollama's llama3.2:1b model
+4. Generating CISO tips (Do's and Don'ts) using Ollama
+5. Storing all data in Firebase Firestore for future retrieval
+
+Run this script without arguments to execute the complete pipeline:
+    python main.py
+
+Options:
+    --limit N          : Limit the number of articles to scrape (default: 10)
+    --skip-scrape      : Skip the scraping step and use existing markdown
+    --input-file FILE  : Use this markdown file instead of scraping
+    --summary-file FILE: Use this summary file instead of generating new summaries
+    --skip-summaries   : Skip the summarization step
+    --skip-tips        : Skip the CISO tips generation step
+    --skip-storage     : Skip storing data in Firebase Firestore
+    --skip-web         : Skip launching the web interface
+    --cli-view         : View summaries and tips in the CLI instead of web
+    --verbose          : Show detailed output
+    --web-port         : Port to run the web interface on (default: 5000)
+"""
+
+import os
+import sys
+import argparse
+import importlib.util
+import time
+from datetime import datetime
+import threading
+import webbrowser
+import re
+import random
+from colorama import Fore, Back, Style, init
+
+# Safe print function to handle terminal display issues
+def safe_print(text, color=None, style=None, end='\n'):
+    """Print text safely with error handling for different environments"""
+    try:
+        if color and style:
+            print(f"{color}{style}{text}{Style.RESET_ALL}", end=end)
+        elif color:
+            print(f"{color}{text}{Style.RESET_ALL}", end=end)
+        elif style:
+            print(f"{style}{text}{Style.RESET_ALL}", end=end)
+        else:
+            print(text, end=end)
+    except UnicodeEncodeError:
+        # If Unicode encoding fails, try multiple fallback options
+        try:
+            # First try replacing problematic characters with ASCII equivalents
+            ascii_text = ""
+            for char in text:
+                if ord(char) < 128:  # Standard ASCII
+                    ascii_text += char
+                elif char in "█▓▒░│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌":
+                    ascii_text += "#"  # Replace box drawing with #
+                elif char in "●○◆◇■□▪▫":
+                    ascii_text += "*"  # Replace geometric shapes with *
+                else:
+                    ascii_text += " "  # Replace everything else with space
+            
+            if color:
+                print(f"{color}{ascii_text}{Style.RESET_ALL}", end=end)
+            else:
+                print(ascii_text, end=end)
+        except:
+            # Last resort: strip ALL non-standard ASCII
+            try:
+                basic_text = ''.join(c for c in text if ord(c) < 128)
+                print(basic_text, end=end)
+            except:
+                # If absolutely nothing works, try without any formatting
+                try:
+                    print(text, end=end)
+                except:
+                    pass  # Silently fail if printing is impossible
+    except (IOError, OSError):
+        # If fancy printing fails, try plain text
+        try:
+            print(text, end=end)
+        except:
+            # If all else fails, silence the error
+            pass
+
+# Initialize colorama
+init(autoreset=True)
+
+# Clear the screen for a clean start
+try:
+    os.system('cls' if os.name == 'nt' else 'clear')
+except:
+    # If screen clearing fails, just continue
+    pass
+
+# Colors array for rainbow effects
+RAINBOW_COLORS = [Fore.RED, Fore.YELLOW, Fore.GREEN, Fore.CYAN, Fore.BLUE, Fore.MAGENTA]
+
+# Professional solid banner with standard characters
+SOLID_BANNER = r"""
+/-----------------------------------------------------------------------\
+|                                                                       |
+|   CCCCC  Y   Y  BBBB   EEEEE  RRRRR   SSSSS  AAAA   AAAA  TTTTT  H  H |
+|  C       Y Y   B   B  E      R   R  S      A    A A    A   T    H  H |
+|  C        Y    BBBB   EEE    RRRRR   SSSS  AAAAAA AAAAAA   T    HHHH |
+|  C        Y    B   B  E      R  R        S A    A A    A   T    H  H |
+|   CCCCC   Y    BBBB   EEEEE  R   R  SSSSS  A    A A    A   T    H  H |
+|                                                                       |
+|         CYBERSECURITY INTELLIGENCE SYSTEM v2.0                        |
+|                                                                       |
+\-----------------------------------------------------------------------/
+"""
+
+# Simple solid banner alternative
+SIMPLE_SOLID_BANNER = r"""
++-----------------------------------------------------------------------+
+|                                                                       |
+|   CCCCC Y   Y BBBBB  EEEEE RRRRR   SSSSS  AAAAA  AAAAA TTTTT H   H   |
+|  C      Y   Y B    B E     R    R S      A     A     A   T   H   H   |
+|  C       Y Y  BBBBB  EEE   RRRRR   SSSS  AAAAA  AAAAA   T   HHHHH   |
+|  C        Y   B    B E     R   R       S A     A     A   T   H   H   |
+|   CCCCC   Y   BBBBB  EEEEE R    R SSSSS  A     A     A   T   H   H   |
+|                                                                       |
+|         CYBERSECURITY INTELLIGENCE SYSTEM v2.0                        |
+|                                                                       |
++-----------------------------------------------------------------------+
+"""
+
+# Block-style banner with standard ASCII characters
+BLOCK_BANNER = r"""
+ _____________________________________________________________ 
+|                                                             |
+|   _____      _               _____             _   _     _  |
+|  / ____|    | |             / ____|           | | | |   (_) |
+| | |    _   _| |__   ___ _ _| (___   __ _  __ _| |_| |__  _  |
+| | |   | | | | '_ \ / _ \ '__\___ \ / _` |/ _` | __| '_ \| | |
+| | |___| |_| | |_) |  __/ |  ____) | (_| | (_| | |_| | | | | |
+|  \_____\__, |_.__/ \___|_| |_____/ \__,_|\__,_|\__|_| |_|_| |
+|         __/ |                                               |
+|        |___/                                                |
+|                                                             |
+|        CYBERSECURITY INTELLIGENCE SYSTEM v1.0               |
+|_____________________________________________________________|
+"""
+
+# Pixel-art style banner matching the user's image
+PIXEL_BANNER = r"""
+ ██████╗██╗   ██╗██████╗ ███████╗██████╗ ███████╗ █████╗  █████╗ ████████╗██╗  ██╗██╗
+██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔════╝██╔══██╗██╔══██╗╚══██╔══╝██║  ██║██║
+██║      ╚████╔╝ ██████╔╝█████╗  ██████╔╝███████╗███████║███████║   ██║   ███████║██║
+██║       ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗╚════██║██╔══██║██╔══██║   ██║   ██╔══██║██║
+╚██████╗   ██║   ██████╔╝███████╗██║  ██║███████║██║  ██║██║  ██║   ██║   ██║  ██║██║
+ ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝
+                                                                                      
+              CYBERSECURITY INTELLIGENCE SYSTEM v2.0
+"""
+
+# Alternative pixel art banner with more blocky characters
+PIXEL_BANNER_ALT = r"""
+  ██████╗ ██╗   ██╗██████╗ ███████╗██████╗ ███████╗ █████╗  █████╗ ████████╗██╗  ██╗██╗
+ ██╔════╝ ╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔════╝██╔══██╗██╔══██╗╚══██╔══╝██║  ██║██║
+ ██║       ╚████╔╝ ██████╔╝█████╗  ██████╔╝███████╗███████║███████║   ██║   ███████║██║
+ ██║        ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗╚════██║██╔══██║██╔══██║   ██║   ██╔══██║██║
+ ╚██████╗   ██║   ██████╔╝███████╗██║  ██║███████║██║  ██║██║  ██║   ██║   ██║  ██║██║
+  ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝
+                                                                                       
+               CYBERSECURITY INTELLIGENCE SYSTEM v2.0
+"""
+
+# Simple pixel art banner using standard ASCII characters
+SIMPLE_PIXEL_BANNER = r"""
+  _____  __   __ ____   _____  ____   _____   _      _     _____ _    _ _____ 
+ / ____| \ \ / // __ \ |  __ \|  __ \ / ____| / \    / \   |_   _| |  | |_   _|
+| |       \ V /| |  | || |__) | |__) | (___  / _ \  / _ \    | | | |__| | | |  
+| |        > < | |  | ||  _  /|  _  / \___ \/ ___ \/ ___ \   | | |  __  | | |  
+| |____   / . \| |__| || | \ \| | \ \ ____// /   \/ /   \\ _| |_| |  | |_| |_ 
+ \_____| /_/ \_\\____/ |_|  \_\_|  \_\_____/_/     \_/     \_____|_|  |_|_____|
+                                                                               
+                  CYBERSECURITY INTELLIGENCE SYSTEM v2.0
+"""
+
+# Retro pixel art style banner that closely matches the image
+RETRO_PIXEL_BANNER = r"""
+  █████  █    █ ████   █████ ████    █████  █████  █████ █████ █   █ █████ 
+ █       █    █ █   █  █     █   █  █      █     █ █     █     █   █   █   
+ █       ██████ ████   ████  ████   █████  ███████ █████ █████ █████   █   
+ █       █    █ █   █  █     █  █        █ █     █     █ █     █   █   █   
+  █████  █    █ ████   █████ █   █  █████  █     █ █████ █     █   █   █   
+                                                                           
+            CYBERSECURITY INTELLIGENCE SYSTEM v2.0
+"""
+
+# Display banner immediately when script is loaded
+try:
+    term_width = os.get_terminal_size().columns
+except (AttributeError, OSError):
+    term_width = 80  # Default width if terminal size can't be determined
+
+try:
+    # Display the block banner first to ensure it's shown
+    safe_print(f"{Fore.CYAN}{BLOCK_BANNER}{Style.RESET_ALL}")
+except:
+    try:
+        # If that fails, try the retro pixel banner
+        safe_print(f"{Fore.CYAN}{RETRO_PIXEL_BANNER}{Style.RESET_ALL}")
+    except:
+        try:
+            # If that fails, try the simple pixel banner
+            safe_print(f"{Fore.CYAN}{SIMPLE_PIXEL_BANNER}{Style.RESET_ALL}")
+        except:
+            # Last resort: just print the name with some styling
+            try:
+                safe_print(f"{Fore.CYAN}{'=' * term_width}{Style.RESET_ALL}")
+                safe_print(f"{Fore.CYAN}{'CYBERSAATHI v2.0':^{term_width}}{Style.RESET_ALL}")
+                safe_print(f"{Fore.CYAN}{'=' * term_width}{Style.RESET_ALL}")
+            except:
+                # If all formatting fails, print plain text
+                print("CYBERSAATHI v2.0")
+
+# Define a function to print animated text
+def print_animated_text(text, delay=0.01, rainbow=False):
+    try:
+        for char in text:
+            if rainbow:
+                color = random.choice(RAINBOW_COLORS)
+                print(f"{color}{Style.BRIGHT}{char}{Style.RESET_ALL}", end='', flush=True)
+            else:
+                print(f"{Fore.WHITE}{Style.BRIGHT}{char}{Style.RESET_ALL}", end='', flush=True)
+            time.sleep(delay)
+        print()
+    except UnicodeEncodeError:
+        # If Unicode encoding fails, use non-animated display
+        if rainbow:
+            safe_print(text, color=random.choice(RAINBOW_COLORS), style=Style.BRIGHT)
+        else:
+            safe_print(text, color=Fore.WHITE, style=Style.BRIGHT)
+    except (IOError, OSError):
+        # Fallback in case of terminal/IO issues
+        if rainbow:
+            print_rainbow(text, bold=True)
+        else:
+            safe_print(text, color=Fore.WHITE, style=Style.BRIGHT)
+
+# Display title with animation
+try:
+    print_animated_text("CYBERSECURITY INTELLIGENCE SYSTEM v1.0", delay=0.01, rainbow=True)
+except:
+    # If animated text fails, use simple print
+    safe_print("CYBERSECURITY INTELLIGENCE SYSTEM v1.0", color=Fore.YELLOW, style=Style.BRIGHT)
+
+# Print a fancy divider
+safe_print(f"{Fore.CYAN}{'═' * term_width}{Style.RESET_ALL}")
+
+# Print a welcome message
+safe_print(f"{Fore.YELLOW}{Style.BRIGHT}Welcome to CyberSaathi!{Style.RESET_ALL}")
+safe_print(f"{Fore.WHITE}Your AI-powered cybersecurity intelligence assistant\n")
+
+# Import required modules
+try:
+    safe_print(f"{Fore.CYAN}Initializing system...{Style.RESET_ALL}")
+    import firebase_admin
+    import requests
+    from tqdm import tqdm
+    from Scraper import scrape_hackernews, scrape_cybernews, MAX_ARTICLES, setup_firestore
+    from export_to_markdown import export_to_markdown, format_article_to_markdown
+    from web_interface import run_web_interface
+    safe_print(f"{Fore.GREEN}Required modules loaded successfully{Style.RESET_ALL}")
+except ImportError as e:
+    safe_print(f"{Fore.RED}Error: Required modules not found - {str(e)}")
+    safe_print(f"{Fore.YELLOW}Make sure all dependencies are installed: pip install -r requirements.txt")
+    sys.exit(1)
+
+# Terminal width detection
+def get_terminal_width():
+    """Get the width of the terminal window"""
+    try:
+        # Try using os.get_terminal_size() first
+        return os.get_terminal_size().columns
+    except (AttributeError, OSError):
+        # If that fails, try using shutil (which handles some edge cases better)
+        try:
+            import shutil
+            size = shutil.get_terminal_size()
+            return size.columns
+        except (ImportError, AttributeError, OSError):
+            pass
+            
+        # If all else fails, return a reasonable default
+        return 80  # Default width
+
+def print_rainbow(text, bold=False):
+    """Print text in rainbow colors"""
+    try:
+        rainbow_text = ""
+        for i, char in enumerate(text):
+            color = RAINBOW_COLORS[i % len(RAINBOW_COLORS)]
+            rainbow_text += f"{color}{Style.BRIGHT if bold else ''}{char}{Style.RESET_ALL}"
+        safe_print(rainbow_text)
+    except UnicodeEncodeError:
+        # If Unicode encoding fails, try without special effects
+        try:
+            ascii_text = text.encode('ascii', 'replace').decode('ascii')
+            safe_print(ascii_text, color=Fore.YELLOW, style=Style.BRIGHT if bold else None)
+        except:
+            # Last resort fallback
+            print(text)
+
+def print_fancy_divider(width=None, style=1):
+    """Print a fancy divider line with random colors"""
+    if width is None:
+        width = get_terminal_width()
+    
+    if style == 1:
+        divider = "=-="  # Simple pattern with basic characters
+        repeat = width // len(divider)
+        color = random.choice(RAINBOW_COLORS)
+        safe_print(f"{color}{divider * repeat}{Style.RESET_ALL}")
+    elif style == 2:
+        divider = "*-*-"  # Alternative simple pattern
+        repeat = width // len(divider)
+        color = random.choice(RAINBOW_COLORS)
+        safe_print(f"{color}{divider * repeat}{Style.RESET_ALL}")
+    elif style == 3:
+        divider = "="  # Single character divider
+        repeat = width
+        safe_print(f"{Fore.CYAN}{divider * repeat}{Style.RESET_ALL}")
+    else:
+        divider = "-"  # Ultra-compatible fallback
+        repeat = width
+        safe_print(f"{Fore.CYAN}{divider * repeat}{Style.RESET_ALL}")
+
+def print_step_header(step_number, total_steps, title):
+    """Print a fancy header for each step"""
+    term_width = get_terminal_width()
+    print_fancy_divider(term_width, style=3)
+    
+    # Calculate padding to center the header
+    padding = (term_width - len(f" STEP {step_number}/{total_steps} {title} ")) // 2
+    padding = max(0, padding)
+    
+    # Create colorful step header
+    safe_print(f"{Fore.BLACK}{Back.CYAN}{' ' * padding} STEP {step_number}/{total_steps} {title} {' ' * padding}{Style.RESET_ALL}")
+    print_fancy_divider(term_width, style=3)
+
+def check_ollama():
+    """Check if Ollama is installed and running"""
+    try:
+        response = requests.get("http://localhost:11434/api/version", timeout=2)
+        return response.status_code == 200
+    except:
+        return False
+
+def scrape_articles(limit=10, verbose=False):
+    """Scrape articles from cybersecurity news sites"""
+    print_step_header(1, 5, "SCRAPING CYBERSECURITY ARTICLES")
+    
+    # Set global article limit
+    global MAX_ARTICLES
+    MAX_ARTICLES = limit
+    
+    try:
+        # Run scrapers
+        safe_print(f"{Fore.YELLOW}Scraping The Hacker News (max {limit} articles)")
+        scrape_hackernews()
+        
+        safe_print(f"\n{Fore.YELLOW}Scraping Cyber News (max {limit} articles)")
+        scrape_cybernews()
+        
+        safe_print(f"\n{Fore.GREEN}Scraping completed successfully")
+        return True
+    except Exception as e:
+        safe_print(f"{Fore.RED}Error during scraping: {str(e)}")
+        return False
+
+def export_to_md(output_file=None, limit=None, verbose=False):
+    """Export Firestore data to markdown format"""
+    print_step_header(2, 5, "EXPORTING ARTICLES TO MARKDOWN")
+    
+    # Generate timestamp for output file if not provided
+    if not output_file:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f"cybersecurity_articles_{timestamp}.md"
+    
+    # Export articles from Firestore to markdown (will use the unified news collection if available)
+    success = export_to_markdown(
+        output_file=output_file,
+        limit=limit
+    )
+    
+    if success:
+        safe_print(f"{Fore.GREEN}Articles exported to markdown: {Fore.CYAN}{output_file}{Style.RESET_ALL}")
+        return output_file
+    else:
+        safe_print(f"{Fore.RED}Failed to export articles to markdown")
+        return None
+
+def summarize_articles(input_file, output_file=None, verbose=False):
+    """Summarize articles using Ollama's llama3.2:1b model"""
+    print_step_header(3, 5, "SUMMARIZING ARTICLES")
+    
+    # Import functions from article_summarizer.py
+    from article_summarizer import read_markdown_file, summarize_with_ollama, check_ollama_availability
+    
+        # Check if Ollama is available
+    if not check_ollama_availability():
+        safe_print(f"{Fore.RED}Cannot proceed with summarization without Ollama service.")
+        return None
+        
+        # Read and parse the markdown file
+        header, articles = read_markdown_file(input_file)
+        
+        # Summarize articles (single-threaded to avoid Ollama overload)
+    safe_print(f"{Fore.YELLOW}Starting summarization of {len(articles)} articles...")
+    results = []
+        
+    # Create a progress bar for the summarization
+    with tqdm(total=len(articles), desc=f"{Fore.CYAN}Summarizing Articles", 
+             bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.BLUE, Fore.RESET)) as pbar:
+        for i, article in enumerate(articles):
+            safe_print(f"{Fore.CYAN}[{i+1}/{len(articles)}] {Fore.WHITE}Summarizing: {Fore.YELLOW}{article['title']}")
+            
+            # Ensure the article has an ID to match with scraped articles
+            if 'id' not in article:
+                article['id'] = f"article_{article['index']}"
+                safe_print(f"{Fore.YELLOW}Added missing ID for article: {article['title']}")
+            
+            # Try summarization up to 3 times if it fails
+            max_retries = 3
+            result = None
+            
+            for retry in range(max_retries):
+                result = summarize_with_ollama(article)
+                if result["status"] == "success":
+                    break
+                
+                # If we failed but have retries left, try again
+                if retry < max_retries - 1:
+                    safe_print(f"{Fore.YELLOW}Retry {retry+1}/{max_retries} for article: {article['title']}")
+                    time.sleep(2)  # Wait before retrying
+            
+            # If all retries failed, create a placeholder summary to ensure every article has one
+            if result["status"] != "success":
+                safe_print(f"{Fore.RED}Failed to summarize after {max_retries} attempts: {article['title']}")
+                # Create a placeholder summary based on the first part of the content
+                content_preview = article['content'][:300] + "..." if len(article['content']) > 300 else article['content']
+                result = {
+                    "status": "placeholder",
+                    "summary": f"Summary generation failed. Article preview: {content_preview}",
+                    "article": article
+                }
+                safe_print(f"{Fore.YELLOW}Created placeholder summary for: {article['title']}")
+            
+            results.append(result)
+            pbar.update(1)
+        
+    # Generate output file name if requested
+    if output_file:
+        # Import create_summary_markdown from article_summarizer.py
+        from article_summarizer import create_summary_markdown
+        output_path = create_summary_markdown(header, results, output_file)
+        safe_print(f"{Fore.GREEN}Summarization completed. Output saved to: {Fore.CYAN}{output_path}{Style.RESET_ALL}")
+    else:
+        safe_print(f"{Fore.GREEN}Summarization completed. {len(results)} articles summarized.")
+    
+    return results
+
+def generate_ciso_tips(input_file=None, summaries=None, output_file=None, verbose=False):
+    """Generate CISO tips from article summaries"""
+    print_step_header(4, 5, "GENERATING CISO TIPS")
+    
+    # Import functions from ciso_tips_agent.py
+    from ciso_tips_agent import extract_articles_from_markdown, generate_tips_with_ollama
+    
+    # Get articles from either input file or summaries list
+    if input_file:
+        articles = extract_articles_from_markdown(input_file)
+    elif summaries:
+        # Convert summaries to the format expected by generate_tips_with_ollama
+        articles = []
+        for summary in summaries:
+            article = {
+                'index': summary['article']['index'],
+                'title': summary['article']['title'],
+                'content': summary['summary'] if summary['status'] == 'success' else summary['article']['content'],
+                'metadata': {
+                    'id': summary['article'].get('id', f"article_{summary['article']['index']}"),
+                    'source': summary['article'].get('source', 'Unknown'),
+                    'date': summary['article'].get('date', 'Unknown'),
+                    'tags': summary['article'].get('tags', 'None'),
+                }
+            }
+            articles.append(article)
+    else:
+        safe_print(f"{Fore.RED}Error: Either input_file or summaries must be provided")
+        return None
+        
+        # Generate tips for each article
+    safe_print(f"{Fore.YELLOW}Generating tips for {len(articles)} articles...")
+    tips_collection = []
+        
+    # Create a progress bar for tips generation
+    with tqdm(total=len(articles), desc=f"{Fore.MAGENTA}Generating CISO Tips", 
+             bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.MAGENTA, Fore.RESET)) as pbar:
+        for i, article in enumerate(articles):
+            safe_print(f"{Fore.MAGENTA}[{i+1}/{len(articles)}] {Fore.WHITE}Processing: {Fore.YELLOW}{article['title']}")
+            
+            # Ensure the article has proper metadata with an ID
+            if 'metadata' not in article or 'id' not in article['metadata']:
+                if 'metadata' not in article:
+                    article['metadata'] = {}
+                article['metadata']['id'] = f"article_{article['index']}"
+                safe_print(f"{Fore.YELLOW}Added missing ID metadata for article: {article['title']}")
+            
+            # Try generating tips up to 3 times if it fails
+            max_retries = 3
+            tips = None
+            
+            for retry in range(max_retries):
+                try:
+                    tips = generate_tips_with_ollama(article)
+                    
+                    # Check if tips generation was successful
+                    if tips and 'error' not in tips and 'tips' in tips:
+                        break
+                    
+                    # If we failed but have retries left, try again
+                    if retry < max_retries - 1:
+                        safe_print(f"{Fore.YELLOW}Retry {retry+1}/{max_retries} for tips generation: {article['title']}")
+                        time.sleep(2)  # Wait before retrying
+                except Exception as e:
+                    safe_print(f"{Fore.RED}Error generating tips (try {retry+1}): {str(e)}")
+                    if retry < max_retries - 1:
+                        time.sleep(2)  # Wait before retrying
+            
+            # If all retries failed, create placeholder tips to ensure every article has tips
+            if not tips or 'error' in tips or 'tips' not in tips:
+                safe_print(f"{Fore.RED}Failed to generate tips after {max_retries} attempts: {article['title']}")
+                # Create placeholder tips
+                tips = {
+                    "article_id": article['metadata'].get('id', f"article_{article['index']}"),
+                    "title": article['title'],
+                    "source": article['metadata'].get('source', 'Unknown'),
+                    "date": article['metadata'].get('date', 'Unknown'),
+                    "tags": article['metadata'].get('tags', 'None'),
+                    "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
+                    "tips": {
+                        "summary": "Tips generation failed. Basic security recommendations provided.",
+                        "dos": [
+                            "Keep your software and operating systems updated with the latest patches",
+                            "Use strong, unique passwords for each account",
+                            "Enable two-factor authentication when available",
+                            "Be cautious with email attachments and links"
+                        ],
+                        "donts": [
+                            "Don't share sensitive information on unsecured websites",
+                            "Don't use public Wi-Fi for sensitive transactions without a VPN",
+                            "Don't reuse passwords across multiple sites",
+                            "Don't ignore security warnings from your devices"
+                        ]
+                    },
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                safe_print(f"{Fore.YELLOW}Created placeholder tips for: {article['title']}")
+            
+            tips_collection.append(tips)
+            pbar.update(1)
+        
+    # Format and save tips as markdown if output file is specified
+    if output_file:
+        from ciso_tips_agent import format_tips_as_markdown
+        format_tips_as_markdown(tips_collection, output_file)
+        safe_print(f"{Fore.GREEN}CISO tips generation completed. Output saved to: {Fore.CYAN}{output_file}{Style.RESET_ALL}")
+    else:
+        safe_print(f"{Fore.GREEN}CISO tips generation completed. {len(tips_collection)} tip sets generated.")
+    
+    return tips_collection
+
+def store_results_in_firestore(summaries=None, tips=None, summary_file=None, tips_file=None):
+    """Store summaries and tips in Firebase Firestore for the web interface"""
+    print_step_header(5, 5, "STORING RESULTS IN FIREBASE")
+    
+    from store_tips_summaries import parse_summaries_markdown, parse_tips_markdown, store_in_firestore
+    
+    # Get collection names
+    tips_collection = os.getenv("FIREBASE_COLLECTION_TIPS", "tips")
+    summaries_collection = os.getenv("FIREBASE_COLLECTION_SUMMARIES", "summaries")
+    news_collection = os.getenv("FIREBASE_COLLECTION_NEWS", "news")
+    
+    stored_summaries = 0
+    stored_tips = 0
+    
+    try:
+        # First, get all article IDs from the news collection to ensure coverage
+        from firebase_helper import find
+        all_articles = find(news_collection)
+        article_ids = {article.get("_id"): article for article in all_articles if "_id" in article}
+        
+        if not all_articles:
+            safe_print(f"{Fore.RED}Warning: No articles found in news collection. Check your Firebase data.")
+        else:
+            safe_print(f"{Fore.GREEN}Found {len(all_articles)} articles in news collection.")
+        
+        # Process summaries
+        if summaries:
+            # Prepare summaries for Firebase directly (without creating markdown files)
+            firebase_summaries = []
+            for result in summaries:
+                article = result["article"]
+                article_id = article.get('id', f"unknown_id_{article['index']}")
+                
+                summary_obj = {
+                    "article_id": article_id,
+                    "title": article.get('title', 'Unknown Title'),
+                    "summary": result.get('summary', 'No summary available') if result['status'] == 'success' else f"Error: {result.get('error', 'Unknown error')}",
+                    "source": article.get('source', 'Unknown'),
+                    "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
+                    "date": article.get('date', 'Unknown'),
+                    "generated_at": datetime.now().strftime("%Y-%m-%d")
+                }
+                firebase_summaries.append(summary_obj)
+            
+            stored_summaries = store_in_firestore(summaries_collection, firebase_summaries)
+            safe_print(f"{Fore.GREEN}Stored {stored_summaries} summaries directly in Firebase Firestore")
+        elif summary_file and os.path.exists(summary_file):
+            # Use the unified news collection
+            parsed_summaries = parse_summaries_markdown(summary_file, news_collection)
+            stored_summaries = store_in_firestore(summaries_collection, parsed_summaries)
+            safe_print(f"{Fore.GREEN}Stored {stored_summaries} summaries from file in Firebase Firestore")
+        
+        # Process tips
+        if tips:
+            # Prepare tips for Firebase directly (without creating markdown files)
+            firebase_tips = []
+            for tip in tips:
+                # Don't skip tips with errors, ensure all articles have tips
+                # Add source_type if not present
+                if 'source_type' not in tip and 'source' in tip:
+                    tip['source_type'] = tip['source'].lower().replace(' ', '')
+                
+                firebase_tips.append(tip)
+            
+            stored_tips = store_in_firestore(tips_collection, firebase_tips)
+            safe_print(f"{Fore.GREEN}Stored {stored_tips} tips directly in Firebase Firestore")
+        elif tips_file and os.path.exists(tips_file):
+            # Use the unified news collection
+            parsed_tips = parse_tips_markdown(tips_file, news_collection)
+            stored_tips = store_in_firestore(tips_collection, parsed_tips)
+            safe_print(f"{Fore.GREEN}Stored {stored_tips} tips from file in Firebase Firestore")
+        
+        # Check if we have summaries and tips for every article
+        # If not, generate placeholders for the missing ones
+        if len(article_ids) > 0:
+            from firebase_helper import find_one, insert_one
+            
+            # Check each article for summaries and tips
+            summaries_added = 0
+            tips_added = 0
+            
+            for article_id, article in article_ids.items():
+                # Check for summary
+                summary = find_one(summaries_collection, {"article_id": article_id})
+                if not summary:
+                    # Create placeholder summary
+                    placeholder_summary = {
+                        "article_id": article_id,
+                        "title": article.get('title', 'Unknown Title'),
+                        "summary": "No summary available. This is a placeholder created to ensure all articles have summaries.",
+                        "source": article.get('source', 'Unknown'),
+                        "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
+                        "date": article.get('date', 'Unknown'),
+                        "generated_at": datetime.now().strftime("%Y-%m-%d")
+                    }
+                    # Add _id field for Firestore document ID
+                    placeholder_summary["_id"] = article_id
+                    
+                    # Store placeholder summary
+                    insert_one(summaries_collection, placeholder_summary)
+                    summaries_added += 1
+                
+                # Check for tips
+                tips = find_one(tips_collection, {"article_id": article_id})
+                if not tips:
+                    # Create placeholder tips
+                    placeholder_tips = {
+                        "article_id": article_id,
+                        "title": article.get('title', 'Unknown Title'),
+                        "source": article.get('source', 'Unknown'),
+                        "date": article.get('date', 'Unknown'),
+                        "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
+                        "tips": {
+                            "summary": "No tips available. This is a placeholder created to ensure all articles have tips.",
+                            "dos": [
+                                "Keep your software and operating systems updated with the latest patches",
+                                "Use strong, unique passwords for each account",
+                                "Enable two-factor authentication when available",
+                                "Be cautious with email attachments and links"
+                            ],
+                            "donts": [
+                                "Don't share sensitive information on unsecured websites",
+                                "Don't use public Wi-Fi for sensitive transactions without a VPN",
+                                "Don't reuse passwords across multiple sites",
+                                "Don't ignore security warnings from your devices"
+                            ]
+                        },
+                        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    # Add _id field for Firestore document ID
+                    placeholder_tips["_id"] = article_id
+                    
+                    # Store placeholder tips
+                    insert_one(tips_collection, placeholder_tips)
+                    tips_added += 1
+            
+            if summaries_added > 0 or tips_added > 0:
+                safe_print(f"{Fore.YELLOW}Added {summaries_added} placeholder summaries and {tips_added} placeholder tips to ensure coverage for all articles")
+    
+    except Exception as e:
+        safe_print(f"{Fore.RED}Error storing data in Firebase: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    finally:
+        # Close Firebase connection
+        from firebase_helper import close
+        close()
+    
+    return stored_summaries + stored_tips > 0
+
+def display_in_cli(summaries=None, tips=None, summary_file=None, tips_file=None):
+    """Display summaries and tips in the CLI"""
+    print_step_header(6, 6, "DISPLAYING RESULTS IN CLI")
+    
+    term_width = get_terminal_width()
+    
+    # Display summaries
+    if summaries:
+        print_fancy_divider(term_width, style=3)
+        safe_print(f"{Fore.CYAN}{Back.BLACK}{' ARTICLE SUMMARIES ':^{term_width}}{Style.RESET_ALL}")
+        print_fancy_divider(term_width, style=3)
+        
+        for i, summary in enumerate(summaries):
+            article = summary['article']
+            
+            # Article number with colorful box
+            article_num = f" ARTICLE {i+1}/{len(summaries)} "
+            safe_print(f"\n{Fore.BLACK}{Back.YELLOW}{article_num}{Style.RESET_ALL}")
+            
+            # Title with rainbow effect
+            safe_print(f"\n{Fore.YELLOW}{Style.BRIGHT}Title: {Style.RESET_ALL}", end='')
+            print_rainbow(article['title'].strip(), bold=True)
+            
+            # Print summary
+            safe_print(f"\n{Fore.GREEN}{Style.BRIGHT}Summary:{Style.RESET_ALL}")
+            if summary['status'] == 'success':
+                safe_print(f"{Fore.WHITE}{summary['summary'].strip()}")
+            else:
+                safe_print(f"{Fore.RED}Error generating summary: {summary.get('error', 'Unknown error')}")
+            
+            print_fancy_divider(term_width, style=1)
+            
+            # Pause after each article except the last one
+            if i < len(summaries) - 1:
+                try:
+                    input(f"{Fore.YELLOW}Press Enter to continue to next summary...{Style.RESET_ALL}")
+                except:
+                    time.sleep(2)  # Wait 2 seconds if input fails
+    elif summary_file and os.path.exists(summary_file):
+        # This code remains unchanged - for reading from file if needed
+        print_fancy_divider(term_width, style=3)
+        safe_print(f"{Fore.CYAN}{Back.BLACK}{' ARTICLE SUMMARIES ':^{term_width}}{Style.RESET_ALL}")
+        print_fancy_divider(term_width, style=3)
+        
+        with open(summary_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            # Extract articles with regex
+            article_sections = re.findall(r'## Article: (.*?)\n\n.*?### Summary:(.*?)(?=\n\n## Article:|$)', content, re.DOTALL)
+            
+            for i, (title, summary) in enumerate(article_sections):
+                # Article number with colorful box
+                article_num = f" ARTICLE {i+1}/{len(article_sections)} "
+                safe_print(f"\n{Fore.BLACK}{Back.YELLOW}{article_num}{Style.RESET_ALL}")
+                
+                # Title with rainbow effect
+                safe_print(f"\n{Fore.YELLOW}{Style.BRIGHT}Title: {Style.RESET_ALL}", end='')
+                print_rainbow(title.strip(), bold=True)
+                
+                # Print summary
+                safe_print(f"\n{Fore.GREEN}{Style.BRIGHT}Summary:{Style.RESET_ALL}")
+                safe_print(f"{Fore.WHITE}{summary.strip()}")
+                
+                print_fancy_divider(term_width, style=1)
+                
+                # Pause after each article except the last one
+                if i < len(article_sections) - 1:
+                    try:
+                        input(f"{Fore.YELLOW}Press Enter to continue to next summary...{Style.RESET_ALL}")
+                    except:
+                        time.sleep(2)  # Wait 2 seconds if input fails
+    
+    # Display tips
+    if tips:
+        print_fancy_divider(term_width, style=3)
+        safe_print(f"{Fore.CYAN}{Back.BLACK}{' CISO TIPS & RECOMMENDATIONS ':^{term_width}}{Style.RESET_ALL}")
+        print_fancy_divider(term_width, style=3)
+        
+        for i, tip in enumerate(tips):
+            # Skip if error in tips
+            if 'error' in tip:
+                continue
+                
+            # Article number with colorful box
+            article_num = f" TIP SET {i+1}/{len(tips)} "
+            safe_print(f"\n{Fore.BLACK}{Back.MAGENTA}{article_num}{Style.RESET_ALL}")
+            
+            # Title with rainbow effect
+            safe_print(f"\n{Fore.YELLOW}{Style.BRIGHT}Title: {Style.RESET_ALL}", end='')
+            print_rainbow(tip['title'].strip(), bold=True)
+            
+            # Security recommendations
+            safe_print(f"\n{Fore.MAGENTA}{Style.BRIGHT}Security Recommendations:{Style.RESET_ALL}")
+            safe_print(f"{Fore.WHITE}{tip['tips']['summary'].strip()}")
+            
+            # Do's with check marks and green color
+            safe_print(f"\n{Back.GREEN}{Fore.WHITE}{' DOS ':^20}{Style.RESET_ALL}")
+            for item in tip['tips']['dos']:
+                safe_print(f"{Fore.GREEN}+ {Fore.WHITE}{item.strip()}")
+            
+            # Don'ts with x marks and red color
+            safe_print(f"\n{Back.RED}{Fore.WHITE}{' DONTS ':^20}{Style.RESET_ALL}")
+            for item in tip['tips']['donts']:
+                safe_print(f"{Fore.RED}- {Fore.WHITE}{item.strip()}")
+            
+            print_fancy_divider(term_width, style=1)
+            
+            # Pause after each article except the last one
+            if i < len(tips) - 1:
+                try:
+                    input(f"{Fore.YELLOW}Press Enter to continue to next tip set...{Style.RESET_ALL}")
+                except:
+                    time.sleep(2)  # Wait 2 seconds if input fails
+    elif tips_file and os.path.exists(tips_file):
+        # This code remains unchanged - for reading from file if needed
+        print_fancy_divider(term_width, style=3)
+        safe_print(f"{Fore.CYAN}{Back.BLACK}{' CISO TIPS & RECOMMENDATIONS ':^{term_width}}{Style.RESET_ALL}")
+        print_fancy_divider(term_width, style=3)
+        
+        with open(tips_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            # Extract tips sections with regex
+            tips_sections = re.findall(r'## Article: (.*?)\n\n.*?### Security Recommendations:(.*?)### Do\'s:(.*?)### Don\'ts:(.*?)(?=\n\n## Article:|$)', 
+                                       content, re.DOTALL)
+            
+            for i, (title, recommendations, dos, donts) in enumerate(tips_sections):
+                # Article number with colorful box
+                article_num = f" TIP SET {i+1}/{len(tips_sections)} "
+                safe_print(f"\n{Fore.BLACK}{Back.MAGENTA}{article_num}{Style.RESET_ALL}")
+                
+                # Title with rainbow effect
+                safe_print(f"\n{Fore.YELLOW}{Style.BRIGHT}Title: {Style.RESET_ALL}", end='')
+                print_rainbow(title.strip(), bold=True)
+                
+                # Security recommendations
+                safe_print(f"\n{Fore.MAGENTA}{Style.BRIGHT}Security Recommendations:{Style.RESET_ALL}")
+                safe_print(f"{Fore.WHITE}{recommendations.strip()}")
+                
+                # Do's with ASCII characters
+                safe_print(f"\n{Back.GREEN}{Fore.WHITE}{' DOS ':^20}{Style.RESET_ALL}")
+                do_items = re.findall(r'- (.*?)$', dos, re.MULTILINE)
+                for item in do_items:
+                    safe_print(f"{Fore.GREEN}+ {Fore.WHITE}{item.strip()}")
+                
+                # Don'ts with ASCII characters
+                safe_print(f"\n{Back.RED}{Fore.WHITE}{' DONTS ':^20}{Style.RESET_ALL}")
+                dont_items = re.findall(r'- (.*?)$', donts, re.MULTILINE)
+                for item in dont_items:
+                    safe_print(f"{Fore.RED}- {Fore.WHITE}{item.strip()}")
+                
+                print_fancy_divider(term_width, style=1)
+                
+                # Pause after each article except the last one
+                if i < len(tips_sections) - 1:
+                    try:
+                        input(f"{Fore.YELLOW}Press Enter to continue to next tip set...{Style.RESET_ALL}")
+                    except:
+                        time.sleep(2)  # Wait 2 seconds if input fails
+    
+    safe_print(f"\n{Fore.GREEN}Finished displaying results in CLI")
+    return True
+
+def main():
+    """Main function to run the complete workflow"""
+    parser = argparse.ArgumentParser(description="CyberSaathi Unified Workflow")
+    parser.add_argument("--limit", type=int, default=3,
+                        help="Maximum number of articles to scrape from each site (default: 3)")
+    parser.add_argument("--skip-scrape", action="store_true",
+                        help="Skip the scraping step and use existing markdown")
+    parser.add_argument("--input-file", type=str,
+                        help="Use this markdown file instead of scraping")
+    parser.add_argument("--summary-file", type=str,
+                        help="Use this summary file instead of generating new summaries")
+    parser.add_argument("--skip-summaries", action="store_true",
+                        help="Skip the article summarization step")
+    parser.add_argument("--skip-tips", action="store_true",
+                        help="Skip the CISO tips generation step")
+    parser.add_argument("--skip-storage", action="store_true",
+                        help="Skip storing data in Firebase Firestore")
+    parser.add_argument("--skip-web", action="store_true",
+                        help="Skip launching the web interface")
+    parser.add_argument("--cli-view", action="store_true",
+                        help="View summaries and tips in the CLI instead of web")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Show detailed output")
+    parser.add_argument("--web-port", type=int, default=5000,
+                        help="Port to run the web interface on (default: 5000)")
+    parser.add_argument("--save-md", action="store_true",
+                        help="Save summaries and tips as markdown files")
+    parser.add_argument("--auto-flow", action="store_true",
+                        help="Run complete workflow automatically without prompts")
+    
+    args = parser.parse_args()
+    
+    # If auto-flow is specified, set up automatic handling
+    if args.auto_flow or len(sys.argv) == 1:  # Default to auto-flow if no args provided
+        safe_print(f"{Fore.GREEN}Running in automatic flow mode with llama3.2:1b model")
+        args.save_md = True  # Always save markdown files
+        args.cli_view = False  # No CLI view (no pauses for input)
+        args.skip_web = False  # Ensure web interface is launched
+    
+    # Check if Ollama is running if needed - but don't ask for confirmation
+    if not (args.skip_summaries and args.skip_tips) and not check_ollama():
+        safe_print(f"{Fore.RED}Warning: Ollama is not running or not accessible.")
+        safe_print(f"{Fore.YELLOW}This is required for article summarization and CISO tips.")
+        safe_print(f"{Fore.YELLOW}Attempting to continue anyway, but summarization may fail...")
+        # No user input here, just continue and let it fail if necessary
+    
+    start_time = time.time()
+    
+    # Step 1-2: Scrape articles and export to markdown
+    input_file = args.input_file
+    if not args.skip_scrape and not input_file:
+        # Scrape articles
+        if scrape_articles(limit=args.limit, verbose=args.verbose):
+            # Export to markdown
+            input_file = export_to_md(limit=args.limit, verbose=args.verbose)
+            if not input_file:
+                safe_print(f"{Fore.RED}❌ Failed to export articles to markdown. Exiting.")
+                sys.exit(1)
+    elif args.skip_scrape and not input_file:
+        safe_print(f"{Fore.RED}❌ Error: --skip-scrape option requires --input-file. Please specify an input file.")
+        sys.exit(1)
+    
+    # Check if input file exists
+    if not os.path.exists(input_file):
+        safe_print(f"{Fore.RED}❌ Error: Input file '{input_file}' not found")
+        sys.exit(1)
+    
+    safe_print(f"{Fore.GREEN}✅ Using input file: {Fore.CYAN}{input_file}")
+    
+    # Step 3: Summarize articles
+    summary_file = args.summary_file
+    summaries = None
+    
+    if args.skip_summaries:
+        safe_print(f"{Fore.YELLOW}Skipping article summarization...")
+        if summary_file and os.path.exists(summary_file):
+            safe_print(f"{Fore.GREEN}✅ Using provided summary file: {Fore.CYAN}{summary_file}")
+        else:
+            # If summary file not provided or doesn't exist, use input file as source for tips
+            summary_file = input_file
+            safe_print(f"{Fore.YELLOW}No summary file provided, using input file for tips generation")
+    else:
+        if summary_file and os.path.exists(summary_file):
+            # Use provided summary file
+            safe_print(f"{Fore.GREEN}✅ Using provided summary file: {Fore.CYAN}{summary_file}")
+        else:
+            # Generate summaries in memory
+            output_file = args.save_md and f"article_summaries_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            summaries = summarize_articles(input_file, output_file=output_file, verbose=args.verbose)
+            if not summaries:
+                safe_print(f"{Fore.RED}❌ Failed to summarize articles. Exiting.")
+                sys.exit(1)
+    
+            if args.save_md and output_file:
+                summary_file = output_file
+                safe_print(f"{Fore.GREEN}✅ Saved summaries to file: {Fore.CYAN}{summary_file}")
+    
+    # Step 4: Generate CISO Tips
+    tips_file = None
+    tips = None
+    
+    if not args.skip_tips:
+        # Generate tips
+        output_file = args.save_md and f"ciso_tips_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        
+        if summaries:
+            # Generate tips from in-memory summaries
+            tips = generate_ciso_tips(summaries=summaries, output_file=output_file, verbose=args.verbose)
+        else:
+            # Generate tips from file
+            tips = generate_ciso_tips(input_file=summary_file, output_file=output_file, verbose=args.verbose)
+        
+        if args.save_md and output_file:
+            tips_file = output_file
+            safe_print(f"{Fore.GREEN}✅ Saved tips to file: {Fore.CYAN}{tips_file}")
+    else:
+        safe_print(f"{Fore.YELLOW}Skipping CISO Tips generation (--skip-tips)")
+    
+    # Step 5: Store in Firebase Firestore
+    if not args.skip_storage:
+        store_results_in_firestore(summaries=summaries, tips=tips, summary_file=summary_file, tips_file=tips_file)
+    else:
+        safe_print(f"{Fore.YELLOW}Skipping Firebase Firestore storage (--skip-storage)")
+    
+    # Print completion message
+    elapsed_time = time.time() - start_time
+    term_width = get_terminal_width()
+    print_fancy_divider(term_width, style=3)
+    safe_print(f"{Fore.CYAN}{Back.BLACK}{' CYBERSAATHI WORKFLOW COMPLETED SUCCESSFULLY! ':^{term_width}}{Style.RESET_ALL}")
+    print_fancy_divider(term_width, style=3)
+    
+    # Show session summary
+    safe_print(f"{Fore.YELLOW}Time elapsed: {Fore.WHITE}{elapsed_time:.2f} seconds")
+    
+    if input_file:
+        safe_print(f"{Fore.YELLOW}Articles file: {Fore.CYAN}{input_file}")
+    if summary_file and args.save_md:
+        safe_print(f"{Fore.YELLOW}Article summaries: {Fore.CYAN}{summary_file}")
+    if tips_file and args.save_md:
+        safe_print(f"{Fore.YELLOW}CISO tips: {Fore.CYAN}{tips_file}")
+    
+    # Display results in CLI if requested, with no input pauses
+    if args.cli_view:
+        modified_display_in_cli(summaries=summaries, tips=tips, summary_file=summary_file, tips_file=tips_file)
+    
+    # Always launch web interface without asking
+    if not args.skip_web:
+        safe_print(f"\n{Fore.GREEN}Launching web interface...")
+        # Open browser in a separate thread after a short delay
+        threading.Timer(2.0, lambda: webbrowser.open(f'http://localhost:{args.web_port}')).start()
+        # Start the Flask web interface
+        run_web_interface(port=args.web_port, debug=False)
+
+# Define a version of display_in_cli that doesn't wait for user input
+def modified_display_in_cli(summaries=None, tips=None, summary_file=None, tips_file=None):
+    """Display summaries and tips in the CLI without waiting for user input"""
+    print_step_header(6, 6, "DISPLAYING RESULTS IN CLI")
+    
+    term_width = get_terminal_width()
+    
+    # Display summaries
+    if summaries:
+        print_fancy_divider(term_width, style=3)
+        safe_print(f"{Fore.CYAN}{Back.BLACK}{' ARTICLE SUMMARIES ':^{term_width}}{Style.RESET_ALL}")
+        print_fancy_divider(term_width, style=3)
+        
+        for i, summary in enumerate(summaries):
+            article = summary['article']
+            
+            # Article number with colorful box
+            article_num = f" ARTICLE {i+1}/{len(summaries)} "
+            safe_print(f"\n{Fore.BLACK}{Back.YELLOW}{article_num}{Style.RESET_ALL}")
+            
+            # Title with rainbow effect
+            safe_print(f"\n{Fore.YELLOW}{Style.BRIGHT}Title: {Style.RESET_ALL}", end='')
+            print_rainbow(article['title'].strip(), bold=True)
+            
+            # Print summary
+            safe_print(f"\n{Fore.GREEN}{Style.BRIGHT}Summary:{Style.RESET_ALL}")
+            if summary['status'] == 'success':
+                safe_print(f"{Fore.WHITE}{summary['summary'].strip()}")
+            else:
+                safe_print(f"{Fore.RED}Error generating summary: {summary.get('error', 'Unknown error')}")
+            
+            print_fancy_divider(term_width, style=1)
+            
+            # No pauses for user input, just continue displaying
+    
+    # Display tips
+    if tips:
+        print_fancy_divider(term_width, style=3)
+        safe_print(f"{Fore.CYAN}{Back.BLACK}{' CISO TIPS & RECOMMENDATIONS ':^{term_width}}{Style.RESET_ALL}")
+        print_fancy_divider(term_width, style=3)
+        
+        for i, tip in enumerate(tips):
+            # Skip if error in tips
+            if 'error' in tip:
+                continue
+                
+            # Article number with colorful box
+            article_num = f" TIP SET {i+1}/{len(tips)} "
+            safe_print(f"\n{Fore.BLACK}{Back.MAGENTA}{article_num}{Style.RESET_ALL}")
+            
+            # Title with rainbow effect
+            safe_print(f"\n{Fore.YELLOW}{Style.BRIGHT}Title: {Style.RESET_ALL}", end='')
+            print_rainbow(tip['title'].strip(), bold=True)
+            
+            # Security recommendations
+            safe_print(f"\n{Fore.MAGENTA}{Style.BRIGHT}Security Recommendations:{Style.RESET_ALL}")
+            safe_print(f"{Fore.WHITE}{tip['tips']['summary'].strip()}")
+            
+            # Do's with check marks and green color
+            safe_print(f"\n{Back.GREEN}{Fore.WHITE}{' DOS ':^20}{Style.RESET_ALL}")
+            for item in tip['tips']['dos']:
+                safe_print(f"{Fore.GREEN}+ {Fore.WHITE}{item.strip()}")
+            
+            # Don'ts with x marks and red color
+            safe_print(f"\n{Back.RED}{Fore.WHITE}{' DONTS ':^20}{Style.RESET_ALL}")
+            for item in tip['tips']['donts']:
+                safe_print(f"{Fore.RED}- {Fore.WHITE}{item.strip()}")
+            
+            print_fancy_divider(term_width, style=1)
+            
+            # No pauses for user input, just continue displaying
+    
+    safe_print(f"\n{Fore.GREEN}Finished displaying results in CLI")
+    return True
+
+if __name__ == "__main__":
+    try:
+        # We don't need to clear screen or print the banner here anymore
+        # since it's now displayed at the very beginning of the script
+        safe_print(f"{Fore.GREEN}Starting CyberSaathi workflow...{Style.RESET_ALL}")
+        main()
+    except KeyboardInterrupt:
+        safe_print(f"\n{Fore.RED}Process interrupted by user. Exiting...")
+        sys.exit(1)
+    except Exception as e:
+        safe_print(f"\n{Fore.RED}Unexpected error: {str(e)}")
+        sys.exit(1) 
