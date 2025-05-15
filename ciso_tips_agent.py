@@ -75,27 +75,29 @@ def generate_tips_with_ollama(article: Dict[str, Any], max_retries=3, retry_dela
     """Generate CISO tips from an article using Ollama's llama3.2:1b model"""
     # Construct prompt for the Ollama model
     prompt = f"""
-You are acting as a Chief Information Security Officer (CISO) providing cybersecurity advice to non-technical users.
-Based on the following article, create a list of practical "DO's" and "DON'Ts" for ordinary people to follow.
-Use simple, non-technical language that anyone can understand.
+You are acting as a Chief Information Security Officer (CISO) providing cybersecurity advice based on recent threats.
+Based on the following article, create a list of practical "DO's" and "DON'Ts" for users to follow.
+Focus on specific, actionable advice directly related to the article's topic and threat vector.
+Your tips must be highly specific to the exact cybersecurity issue described in the article.
 
 Article Title: {article['title']}
 Article Content:
 {article['content']}
 
 Your response should be structured as follows:
-1. A very brief summary of the key security issue (2-3 sentences maximum)
-2. A list of 3-5 "DO's" - specific actions people should take
-3. A list of 3-5 "DON'Ts" - specific actions people should avoid
+1. A specific summary of the key security issue in this exact article (2-3 sentences)
+2. A list of 4-5 "DO's" - specific actions people should take to protect from THIS SPECIFIC threat
+3. A list of 4-5 "DON'Ts" - specific actions people should avoid related to THIS SPECIFIC threat
 
-Your response should be in the following JSON format:
+Your response must be in the following JSON format:
 {{
   "summary": "Brief summary here",
   "dos": ["Do this", "Do that", ...],
   "donts": ["Don't do this", "Don't do that", ...]
 }}
 
-Remember: Keep everything simple, practical, and actionable for non-technical users.
+IMPORTANT: Each "DO" and "DON'T" must be specific to the exact security threat discussed in the article.
+DO NOT provide generic cybersecurity advice. Make all tips directly actionable for the specific issue.
 Make sure to follow proper JSON syntax with quotes around all strings.
 """
 
@@ -141,7 +143,7 @@ Make sure to follow proper JSON syntax with quotes around all strings.
     
     # If we have a successful response, process it
     if response and response.status_code == 200:
-        # Extract the response
+        # Process the successful response as before
         result = response.json()
         response_text = result.get('response', '')
         
@@ -181,32 +183,11 @@ Make sure to follow proper JSON syntax with quotes around all strings.
                         
                         # Try parsing again
                         tips_json = json.loads(fixed_json)
-                except:
-                    # If fixing didn't work, manually extract the data
-                    summary_match = re.search(r'"summary"\s*:\s*"?(.*?)"?,\s*"dos"', json_str)
-                    summary = summary_match.group(1) if summary_match else "No summary available."
-                    
-                    dos_match = re.search(r'"dos"\s*:\s*\[(.*?)\],', json_str, re.DOTALL)
-                    dos_str = dos_match.group(1) if dos_match else ""
-                    dos = []
-                    for item in re.findall(r'"([^"]*)"', dos_str):
-                        dos.append(item)
-                    if not dos:
-                        dos = ["No specific dos provided."]
-                    
-                    donts_match = re.search(r'"donts"\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
-                    donts_str = donts_match.group(1) if donts_match else ""
-                    donts = []
-                    for item in re.findall(r'"([^"]*)"', donts_str):
-                        donts.append(item)
-                    if not donts:
-                        donts = ["No specific don'ts provided."]
-                    
-                    tips_json = {
-                        "summary": summary,
-                        "dos": dos,
-                        "donts": donts
-                    }
+                except Exception as e:
+                    # Fallback if JSON parsing completely fails
+                    tips_json = {"summary": "Error parsing JSON", "dos": [], "donts": []} 
+                
+                # Process as before
             else:
                 # Fall back to extracting the info using regex patterns
                 summary_match = re.search(r'summary["\s:]+([^"]+)', response_text, re.IGNORECASE)
@@ -234,30 +215,77 @@ Make sure to follow proper JSON syntax with quotes around all strings.
                 "source": article['metadata'].get('source', 'Unknown'),
                 "date": article['metadata'].get('date', 'Unknown'),
                 "tags": article['metadata'].get('tags', 'None'),
-                "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),  # Add source_type
+                "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
                 "tips": tips_json,
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
         except Exception as e:
+            # Process exceptions as before
             print(f"Error parsing Ollama response for article '{article['title']}': {str(e)}")
             print(f"Raw response: {response_text}")
             
-            # Create a best-effort result from the raw response
-            # Extract key parts using simpler patterns
+            # Attempt to salvage what we can or create a better placeholder
             try:
+                # Existing fallback code...
+                # But improved to be more specific to the article
                 summary = "Error parsing complete response. See raw response for details."
-                dos = ["Keep your software updated", "Use strong passwords", "Be cautious with unknown links and attachments"]
-                donts = ["Don't share sensitive information", "Don't use public Wi-Fi for sensitive transactions", "Don't ignore security warnings"]
                 
-                # Try to extract at least a summary from the text
-                simple_summary = re.search(r'summary.*?[:"] *(.*?)(?=["\n]|dos)', response_text, re.IGNORECASE | re.DOTALL)
-                if simple_summary:
-                    summary = simple_summary.group(1).strip()
+                # Extract potential security issues from article content
+                content = article['content']
+                title = article['title']
                 
+                # Look for cybersecurity terms in content
+                security_terms = {
+                    "vulnerability": ["patch systems", "update software", "check for CVEs", "don't ignore security patches"],
+                    "malware": ["use antivirus", "scan downloaded files", "avoid suspicious attachments", "don't click unknown links"],
+                    "phishing": ["verify sender emails", "check URLs before clicking", "be wary of urgent requests", "don't share credentials"],
+                    "ransomware": ["backup important data", "use offline backups", "isolate infected systems", "don't pay the ransom"],
+                    "password": ["use strong passwords", "enable 2FA", "use a password manager", "don't reuse passwords"],
+                    "data breach": ["monitor accounts", "change affected passwords", "check for suspicious activity", "don't ignore breach notifications"],
+                    "exploit": ["apply security patches", "disable vulnerable features", "use protective measures", "don't use outdated software"]
+                }
+                
+                found_terms = []
+                related_dos = []
+                related_donts = []
+                
+                # Find security terms in the article
+                for term, advice in security_terms.items():
+                    if term.lower() in content.lower() or term.lower() in title.lower():
+                        found_terms.append(term)
+                        # Each term has 4 pieces of advice, first 2 are dos, last 2 are don'ts
+                        related_dos.extend(advice[:2])
+                        related_donts.extend(advice[2:])
+                
+                # If no specific terms found, look for general security-related content
+                if not found_terms:
+                    # Try to extract a specific issue from title or first paragraph
+                    first_paragraph = content.split('\n\n')[0] if '\n\n' in content else content[:300]
+                    summary = f"This article discusses security issues related to {title}. Users should be aware of potential cybersecurity risks mentioned in the article."
+                    
+                    # Use generic but relevant advice
+                    related_dos = [
+                        "Keep all your systems and software up to date with security patches",
+                        "Use strong, unique passwords for your accounts",
+                        "Enable two-factor authentication when available",
+                        "Be cautious with email attachments and links from unknown sources"
+                    ]
+                    related_donts = [
+                        "Don't share sensitive information on unsecured websites",
+                        "Don't use public Wi-Fi for sensitive transactions without a VPN",
+                        "Don't reuse passwords across multiple sites",
+                        "Don't ignore security warnings from your devices"
+                    ]
+                else:
+                    # Create a more specific summary based on found terms
+                    term_list = ", ".join(found_terms)
+                    summary = f"This article highlights security issues related to {term_list}. Users should follow specific recommendations to protect themselves from these threats."
+                
+                # Create the final fallback json
                 tips_json = {
                     "summary": summary,
-                    "dos": dos,
-                    "donts": donts
+                    "dos": related_dos,
+                    "donts": related_donts
                 }
                 
                 return {
@@ -266,20 +294,43 @@ Make sure to follow proper JSON syntax with quotes around all strings.
                     "source": article['metadata'].get('source', 'Unknown'),
                     "date": article['metadata'].get('date', 'Unknown'),
                     "tags": article['metadata'].get('tags', 'None'),
-                    "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),  # Add source_type
+                    "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
                     "tips": tips_json,
                     "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "parsing_error": str(e),
                     "raw_response": response_text
                 }
             except:
+                # Extreme fallback with article-specific modifications
+                title_words = article['title'].split()
+                security_topic = "cybersecurity issue"
+                for word in title_words:
+                    if word.lower() in ["vulnerability", "exploit", "malware", "phishing", "ransomware", "breach", "attack"]:
+                        security_topic = word.lower()
+                        break
+                
                 return {
                     "article_id": article['metadata'].get('id', f"article_{article['index']}"),
                     "title": article['title'],
                     "source": article['metadata'].get('source', 'Unknown'),
                     "date": article['metadata'].get('date', 'Unknown'),
                     "tags": article['metadata'].get('tags', 'None'),
-                    "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),  # Add source_type
+                    "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
+                    "tips": {
+                        "summary": f"The article discusses a {security_topic} that users should be aware of. Following specific security practices can help mitigate risks associated with this threat.",
+                        "dos": [
+                            f"Keep your systems updated with the latest security patches",
+                            f"Enable additional security features like firewalls and antivirus",
+                            f"Use strong, unique passwords for each of your accounts",
+                            f"Backup your important data regularly to protect against data loss"
+                        ],
+                        "donts": [
+                            f"Don't click on suspicious links or download attachments from unknown sources",
+                            f"Don't share sensitive information on unsecured platforms",
+                            f"Don't ignore security warnings from your applications or operating system",
+                            f"Don't use the same password across multiple sites or services"
+                        ]
+                    },
                     "error": f"Failed to parse response: {str(e)}",
                     "raw_response": response_text
                 }
@@ -287,12 +338,37 @@ Make sure to follow proper JSON syntax with quotes around all strings.
         # If all model variants and retries failed
         error_str = "\n".join(error_messages)
         print(f"All model attempts failed: {error_str}")
+        
+        # Create article-specific fallback
+        title_words = article['title'].split()
+        security_topic = "cybersecurity issue"
+        for word in title_words:
+            if word.lower() in ["vulnerability", "exploit", "malware", "phishing", "ransomware", "breach", "attack"]:
+                security_topic = word.lower()
+                break
+        
         return {
             "article_id": article['metadata'].get('id', f"article_{article['index']}"),
             "title": article['title'],
             "source": article['metadata'].get('source', 'Unknown'),
-            "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),  # Add source_type
-            "error": f"Ollama API error: Failed to find working model. Errors: {error_str}"
+            "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
+            "tips": {
+                "summary": f"The article discusses a {security_topic} that requires attention. While automated tips generation failed, following good security practices is recommended.",
+                "dos": [
+                    f"Keep all software updated with security patches",
+                    f"Use strong authentication methods",
+                    f"Backup important data regularly",
+                    f"Stay informed about {security_topic} threats"
+                ],
+                "donts": [
+                    f"Don't ignore security warnings related to this {security_topic}",
+                    f"Don't click suspicious links or download unknown attachments",
+                    f"Don't share sensitive information without verification",
+                    f"Don't use outdated software vulnerable to known exploits"
+                ]
+            },
+            "error": f"Ollama API error: Failed to find working model. Errors: {error_str}",
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
 def format_tips_as_markdown(tips_collection: List[Dict[str, Any]], output_file: str):

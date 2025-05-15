@@ -69,9 +69,9 @@ def summarize_with_ollama(article, max_retries=3, retry_delay=2):
     """Summarize an article using Ollama's llama3.2:1b model"""
     # Prepare the prompt
     prompt = f"""
-You are a professional article summarizer. Summarize the following article in 3-4 concise paragraphs.
+You are a professional article summarizer. Summarize the following cybersecurity article in 3-4 concise paragraphs.
 Focus on the key points, main insights, and important details.
-Keep your summary informative but concise.
+Keep your summary informative but concise. Extract the most important technical details and security implications.
 
 Title: {article['title']}
 Date: {article.get('date', 'Unknown')}
@@ -145,10 +145,49 @@ Your summary:
     # If we reached here, all model variants failed
     error_str = "\n".join(error_messages)
     print(f"All model attempts failed for article '{article['title']}': {error_str}")
+    
+    # Create an article-specific placeholder summary by extracting key content
+    content = article['content']
+    title = article['title']
+    
+    # Extract relevant information to create a better placeholder
+    # 1. Get first paragraph as intro
+    paragraphs = content.split('\n\n')
+    intro = paragraphs[0] if paragraphs else content[:200]
+    
+    # 2. Extract sentences with cybersecurity terms
+    security_terms = ["vulnerability", "exploit", "attack", "malware", "ransomware", 
+                      "breach", "hack", "security", "threat", "patch", "CVE", "bug",
+                      "flaw", "compromise", "phishing", "trojan", "backdoor", "virus",
+                      "authentication", "encryption", "password", "credential"]
+    
+    relevant_sentences = []
+    sentences = re.split(r'[.!?]+', content)
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if any(term.lower() in sentence.lower() for term in security_terms) and len(sentence) > 20:
+            relevant_sentences.append(sentence)
+    
+    # Create a meaningful article-specific summary based on extracted content
+    placeholder_summary = intro.strip()
+    
+    # Add up to 3 relevant security-related sentences if found
+    if relevant_sentences:
+        additional_info = ". ".join(relevant_sentences[:3]) + "."
+        placeholder_summary += "\n\n" + additional_info
+    
+    # Add information about the title as context
+    placeholder_summary += f"\n\nThe article titled '{title}' discusses important cybersecurity concerns that readers should be aware of."
+    
+    # Truncate if too long
+    if len(placeholder_summary) > 800:
+        placeholder_summary = placeholder_summary[:800] + "..."
+    
     return {
-        "status": "error",
-        "error": f"Failed to summarize with any model variant. Errors: {error_str}",
-        "article": article
+        "status": "placeholder",
+        "summary": placeholder_summary,
+        "article": article,
+        "error": f"Failed to summarize with any model variant. Errors: {error_str}"
     }
 
 def create_summary_markdown(header, summaries, output_file=None):

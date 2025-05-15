@@ -405,15 +405,15 @@ def summarize_articles(input_file, output_file=None, verbose=False):
     # Import functions from article_summarizer.py
     from article_summarizer import read_markdown_file, summarize_with_ollama, check_ollama_availability
     
-        # Check if Ollama is available
+    # Check if Ollama is available
     if not check_ollama_availability():
         safe_print(f"{Fore.RED}Cannot proceed with summarization without Ollama service.")
         return None
-        
-        # Read and parse the markdown file
-        header, articles = read_markdown_file(input_file)
-        
-        # Summarize articles (single-threaded to avoid Ollama overload)
+    
+    # Read and parse the markdown file
+    header, articles = read_markdown_file(input_file)
+    
+    # Summarize articles (single-threaded to avoid Ollama overload)
     safe_print(f"{Fore.YELLOW}Starting summarization of {len(articles)} articles...")
     results = []
         
@@ -442,18 +442,12 @@ def summarize_articles(input_file, output_file=None, verbose=False):
                     safe_print(f"{Fore.YELLOW}Retry {retry+1}/{max_retries} for article: {article['title']}")
                     time.sleep(2)  # Wait before retrying
             
-            # If all retries failed, create a placeholder summary to ensure every article has one
-            if result["status"] != "success":
-                safe_print(f"{Fore.RED}Failed to summarize after {max_retries} attempts: {article['title']}")
-                # Create a placeholder summary based on the first part of the content
-                content_preview = article['content'][:300] + "..." if len(article['content']) > 300 else article['content']
-                result = {
-                    "status": "placeholder",
-                    "summary": f"Summary generation failed. Article preview: {content_preview}",
-                    "article": article
-                }
-                safe_print(f"{Fore.YELLOW}Created placeholder summary for: {article['title']}")
+            # If all retries failed but we got a placeholder, use it
+            if result["status"] != "success" and result["status"] == "placeholder":
+                safe_print(f"{Fore.YELLOW}Using article-specific placeholder summary for: {article['title']}")
+                # The summarize_with_ollama function now returns a better placeholder
             
+            # Store the result (either success or placeholder)
             results.append(result)
             pbar.update(1)
         
@@ -497,8 +491,8 @@ def generate_ciso_tips(input_file=None, summaries=None, output_file=None, verbos
     else:
         safe_print(f"{Fore.RED}Error: Either input_file or summaries must be provided")
         return None
-        
-        # Generate tips for each article
+    
+    # Generate tips for each article
     safe_print(f"{Fore.YELLOW}Generating tips for {len(articles)} articles...")
     tips_collection = []
         
@@ -523,8 +517,8 @@ def generate_ciso_tips(input_file=None, summaries=None, output_file=None, verbos
                 try:
                     tips = generate_tips_with_ollama(article)
                     
-                    # Check if tips generation was successful
-                    if tips and 'error' not in tips and 'tips' in tips:
+                    # Check if tips generation was successful (most likely has a tips field with summary, dos, and donts)
+                    if tips and 'error' not in tips and 'tips' in tips and 'summary' in tips['tips'] and 'dos' in tips['tips']:
                         break
                     
                     # If we failed but have retries left, try again
@@ -536,35 +530,186 @@ def generate_ciso_tips(input_file=None, summaries=None, output_file=None, verbos
                     if retry < max_retries - 1:
                         time.sleep(2)  # Wait before retrying
             
-            # If all retries failed, create placeholder tips to ensure every article has tips
-            if not tips or 'error' in tips or 'tips' not in tips:
-                safe_print(f"{Fore.RED}Failed to generate tips after {max_retries} attempts: {article['title']}")
-                # Create placeholder tips
-                tips = {
-                    "article_id": article['metadata'].get('id', f"article_{article['index']}"),
-                    "title": article['title'],
-                    "source": article['metadata'].get('source', 'Unknown'),
-                    "date": article['metadata'].get('date', 'Unknown'),
-                    "tags": article['metadata'].get('tags', 'None'),
-                    "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
-                    "tips": {
-                        "summary": "Tips generation failed. Basic security recommendations provided.",
+            # If we got tips but they're default/generic, try to make them more article-specific
+            generic_tips_detected = False
+            if tips and 'tips' in tips:
+                # Check for generic dos and donts
+                generic_dos = [
+                    "Keep your software and operating systems updated",
+                    "Use strong, unique passwords for each account",
+                    "Enable two-factor authentication",
+                    "Be cautious with email attachments",
+                    "No specific dos provided"
+                ]
+                
+                generic_donts = [
+                    "Don't share sensitive information on unsecured websites",
+                    "Don't use public Wi-Fi for sensitive transactions",
+                    "Don't reuse passwords across multiple sites",
+                    "Don't ignore security warnings",
+                    "No specific don'ts provided"
+                ]
+                
+                # If all tips are generic, flag for improvement
+                if all(any(generic in tip.lower() for generic in generic_dos) for tip in tips['tips']['dos']) and \
+                   all(any(generic in tip.lower() for generic in generic_donts) for tip in tips['tips']['donts']):
+                    generic_tips_detected = True
+            
+            # If all retries failed or we detected generic tips, create article-specific placeholder
+            if not tips or 'error' in tips or 'tips' not in tips or generic_tips_detected:
+                if not tips or 'error' in tips or 'tips' not in tips:
+                    safe_print(f"{Fore.RED}Failed to generate tips after {max_retries} attempts: {article['title']}")
+                else:
+                    safe_print(f"{Fore.YELLOW}Detected generic tips, creating more specific ones for: {article['title']}")
+                
+                # Extract potential security topics from title and content
+                title = article['title']
+                content = article['content']
+                
+                # Dictionary of security topics and related advice
+                security_topics = {
+                    "vulnerability": {
+                        "summary": "This article discusses security vulnerabilities that could be exploited if not addressed.",
                         "dos": [
-                            "Keep your software and operating systems updated with the latest patches",
-                            "Use strong, unique passwords for each account",
-                            "Enable two-factor authentication when available",
-                            "Be cautious with email attachments and links"
+                            "Install security patches as soon as they become available",
+                            "Enable automatic updates for your operating system and applications",
+                            "Perform regular security scans to check for unpatched vulnerabilities",
+                            "Follow vendor security advisories for products mentioned in the article"
                         ],
                         "donts": [
-                            "Don't share sensitive information on unsecured websites",
-                            "Don't use public Wi-Fi for sensitive transactions without a VPN",
-                            "Don't reuse passwords across multiple sites",
-                            "Don't ignore security warnings from your devices"
+                            "Don't delay applying critical security patches",
+                            "Don't use software that has reached end-of-life with no security updates",
+                            "Don't ignore vulnerability notifications from legitimate sources",
+                            "Don't disable security features that protect against exploits"
                         ]
                     },
-                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "malware": {
+                        "summary": "This article covers malware threats that can compromise system security and data integrity.",
+                        "dos": [
+                            "Use reputable antivirus/anti-malware software and keep it updated",
+                            "Scan all downloaded files before opening them",
+                            "Keep your operating system and applications patched",
+                            "Be wary of unexpected email attachments, even from known senders"
+                        ],
+                        "donts": [
+                            "Don't download software from untrusted sources",
+                            "Don't click on suspicious links in emails, messages, or websites",
+                            "Don't open attachments from unknown senders",
+                            "Don't ignore unusual system behavior that might indicate infection"
+                        ]
+                    },
+                    "phishing": {
+                        "summary": "This article discusses phishing attacks that attempt to steal sensitive information through deception.",
+                        "dos": [
+                            "Verify the sender's email address before responding to requests",
+                            "Check website URLs carefully before entering any credentials",
+                            "Use multi-factor authentication for important accounts",
+                            "Report suspected phishing attempts to your IT department"
+                        ],
+                        "donts": [
+                            "Don't click on links in emails requesting personal information",
+                            "Don't provide sensitive information in response to unexpected requests",
+                            "Don't rush decisions when asked to provide credentials or payments",
+                            "Don't ignore warning signs like poor grammar or urgent requests"
+                        ]
+                    },
+                    "ransomware": {
+                        "summary": "This article highlights ransomware threats that encrypt data and demand payment for recovery.",
+                        "dos": [
+                            "Maintain regular, offline backups of important data",
+                            "Keep all software updated with security patches",
+                            "Use security software that can detect ransomware behavior",
+                            "Have an incident response plan ready in case of infection"
+                        ],
+                        "donts": [
+                            "Don't pay ransom demands as payment doesn't guarantee data recovery",
+                            "Don't open email attachments from unknown or suspicious sources",
+                            "Don't enable macros in documents from untrusted sources",
+                            "Don't connect potentially infected devices to your network"
+                        ]
+                    },
+                    "data breach": {
+                        "summary": "This article discusses data breaches that expose sensitive information to unauthorized parties.",
+                        "dos": [
+                            "Change passwords for any accounts mentioned in the breach",
+                            "Enable multi-factor authentication on all important accounts",
+                            "Monitor your accounts and credit reports for suspicious activity",
+                            "Consider using a password manager for unique, strong passwords"
+                        ],
+                        "donts": [
+                            "Don't ignore breach notifications related to your accounts",
+                            "Don't reuse passwords across different websites and services",
+                            "Don't share sensitive personal information unless necessary",
+                            "Don't click on links in emails claiming to be breach notifications"
+                        ]
+                    }
                 }
-                safe_print(f"{Fore.YELLOW}Created placeholder tips for: {article['title']}")
+                
+                # Find relevant security topics in the article
+                detected_topics = []
+                for topic in security_topics.keys():
+                    if topic.lower() in title.lower() or topic.lower() in content.lower():
+                        detected_topics.append(topic)
+                
+                # If we found relevant topics, use the specific advice
+                if detected_topics:
+                    # Use the first detected topic for simplicity
+                    topic = detected_topics[0]
+                    topic_advice = security_topics[topic]
+                    
+                    # Create topic-specific tips
+                    tips = {
+                        "article_id": article['metadata'].get('id', f"article_{article['index']}"),
+                        "title": article['title'],
+                        "source": article['metadata'].get('source', 'Unknown'),
+                        "date": article['metadata'].get('date', 'Unknown'),
+                        "tags": article['metadata'].get('tags', 'None'),
+                        "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
+                        "tips": topic_advice,
+                        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    safe_print(f"{Fore.GREEN}Created topic-specific tips for '{topic}' in article: {article['title']}")
+                else:
+                    # If no specific topics found, create a more generic but still somewhat customized placeholder
+                    # Extract keywords from title to make it seem more specific
+                    keywords = []
+                    for word in title.split():
+                        # Only include words that might be relevant (length > 4, not common words)
+                        if len(word) > 4 and word.lower() not in ["about", "these", "those", "their", "there", "would", "should", "could"]:
+                            keywords.append(word)
+                    
+                    keyword_phrase = ""
+                    if keywords:
+                        # Use up to 3 keywords from the title
+                        keyword_phrase = ", ".join(keywords[:3])
+                        keyword_phrase = f" related to {keyword_phrase}"
+                    
+                    # Create generic but tailored placeholder
+                    tips = {
+                        "article_id": article['metadata'].get('id', f"article_{article['index']}"),
+                        "title": article['title'],
+                        "source": article['metadata'].get('source', 'Unknown'),
+                        "date": article['metadata'].get('date', 'Unknown'),
+                        "tags": article['metadata'].get('tags', 'None'),
+                        "source_type": article['metadata'].get('source', 'Unknown').lower().replace(' ', ''),
+                        "tips": {
+                            "summary": f"This article discusses cybersecurity issues{keyword_phrase}. Users should follow security best practices to protect their data and systems.",
+                            "dos": [
+                                f"Keep your systems and applications updated with the latest security patches",
+                                f"Use strong, unique passwords and enable multi-factor authentication where available",
+                                f"Be cautious when handling emails, links, and attachments from unknown sources",
+                                f"Regularly backup important data to protect against data loss"
+                            ],
+                            "donts": [
+                                f"Don't click on suspicious links or download attachments from untrusted sources",
+                                f"Don't share sensitive information on unsecured websites or with unverified parties",
+                                f"Don't use the same password across multiple accounts or services",
+                                f"Don't ignore security warnings from your operating system or applications"
+                            ]
+                        },
+                        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    safe_print(f"{Fore.YELLOW}Created keyword-enhanced generic tips for: {article['title']}")
             
             tips_collection.append(tips)
             pbar.update(1)

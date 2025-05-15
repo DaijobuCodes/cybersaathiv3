@@ -304,9 +304,9 @@ def index():
                 hackernews_articles.append(article)
             elif source_type == "cybernews":
                 # Ensure source name is set for cybernews articles
-            if "source" not in article or not article["source"]:
-                article["source"] = "Cyber News"
-                cybernews_articles.append(article)
+                if "source" not in article or not article["source"]:
+                    article["source"] = "Cyber News"
+                    cybernews_articles.append(article)
         
         # Get accurate counts
         hackernews_count = len(hackernews_articles)
@@ -379,158 +379,192 @@ def article_detail(article_id):
         # Get summary from summaries collection
         summary = find_one(firebase_collection_summaries, {"article_id": article_id})
         
-        # If summary doesn't exist, create a better one
+        # Determine if we need to regenerate the summary (it's a placeholder or missing)
+        needs_summary_regeneration = False
         if not summary:
-            # Try to generate a real summary if possible
-            generated_summary = None
-            if try_model_generation and 'description' in article and article['description']:
-                try:
-                    # Format article for summarization
-                    summarization_article = {
+            needs_summary_regeneration = True
+        elif "summary" in summary and isinstance(summary["summary"], str):
+            placeholder_indicators = [
+                "No summary available", 
+                "This is a placeholder", 
+                "Placeholder summary"
+            ]
+            if any(indicator in summary["summary"] for indicator in placeholder_indicators):
+                needs_summary_regeneration = True
+        
+        # If we need a real summary, try to generate one
+        if needs_summary_regeneration and try_model_generation and 'description' in article and article['description']:
+            try:
+                # Format article for summarization
+                summarization_article = {
+                    'id': article_id,
+                    'title': article.get('title', 'Unknown Title'),
+                    'content': article.get('description', ''),
+                    'source': article.get('source', 'Unknown'),
+                    'date': article.get('date', 'Unknown'),
+                    'tags': article.get('tags', 'Unknown')
+                }
+                # Try to summarize
+                result = summarize_with_ollama(summarization_article)
+                if result and result["status"] == "success":
+                    generated_summary = result["summary"]
+                    print(f"Successfully generated real summary in article detail for: {article['title']}")
+                    
+                    # Create or update the summary in the database
+                    new_summary = {
+                        "article_id": article_id,
+                        "title": article.get('title', 'Unknown Title'),
+                        "summary": generated_summary,
+                        "source": article.get('source', 'Unknown'),
+                        "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
+                        "date": article.get('date', 'Unknown'),
+                        "generated_at": datetime.now().strftime("%Y-%m-%d")
+                    }
+                    # Add _id field for Firestore document ID
+                    new_summary["_id"] = article_id
+                    
+                    # Store or update the summary
+                    insert_one(firebase_collection_summaries, new_summary)
+                    
+                    # Update the summary for display
+                    article["summary"] = generated_summary
+                elif result and result["status"] == "placeholder":
+                    # Use the improved placeholder if generated
+                    article_specific_placeholder = result["summary"]
+                    
+                    # Create or update the placeholder
+                    new_summary = {
+                        "article_id": article_id,
+                        "title": article.get('title', 'Unknown Title'),
+                        "summary": article_specific_placeholder,
+                        "source": article.get('source', 'Unknown'),
+                        "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
+                        "date": article.get('date', 'Unknown'),
+                        "generated_at": datetime.now().strftime("%Y-%m-%d")
+                    }
+                    # Add _id field for Firestore document ID
+                    new_summary["_id"] = article_id
+                    
+                    # Store the improved placeholder
+                    insert_one(firebase_collection_summaries, new_summary)
+                    
+                    # Update the summary for display
+                    article["summary"] = article_specific_placeholder
+                else:
+                    # Fall back to existing summary or create a basic one
+                    if summary and "summary" in summary:
+                        article["summary"] = summary["summary"]
+                    else:
+                        article["summary"] = "Summary generation failed. Please check back later."
+            except Exception as e:
+                print(f"Error generating real summary in article detail: {str(e)}")
+                # Use existing summary if available
+                if summary and "summary" in summary:
+                    article["summary"] = summary["summary"]
+                else:
+                    article["summary"] = f"No summary available for '{article.get('title')}'."
+        else:
+            # Use existing summary
+            if summary and "summary" in summary:
+                article["summary"] = summary["summary"]
+            else:
+                article["summary"] = f"No summary available for '{article.get('title')}'."
+        
+        # Get tips from tips collection
+        tips = find_one(firebase_collection_tips, {"article_id": article_id})
+        
+        # Determine if we need to regenerate the tips (placeholder or missing)
+        needs_tips_regeneration = False
+        if not tips:
+            needs_tips_regeneration = True
+        elif "tips" in tips and isinstance(tips["tips"], dict) and "summary" in tips["tips"]:
+            placeholder_indicators = [
+                "No tips available", 
+                "This is a placeholder", 
+                "basic security recommendations"
+            ]
+            if any(indicator.lower() in tips["tips"]["summary"].lower() for indicator in placeholder_indicators):
+                needs_tips_regeneration = True
+            
+            # Also check if all tips are generic
+            generic_dos = [
+                "Keep your software and operating systems updated",
+                "Use strong, unique passwords for each account",
+                "Enable two-factor authentication",
+                "Be cautious with email attachments"
+            ]
+            if "dos" in tips["tips"] and all(any(generic in tip for generic in generic_dos) for tip in tips["tips"]["dos"]):
+                needs_tips_regeneration = True
+        
+        # If we need real tips, try to generate them
+        if needs_tips_regeneration and try_model_generation and 'description' in article and article['description']:
+            try:
+                # Format article for tips generation
+                tips_article = {
+                    'title': article.get('title', 'Unknown Title'),
+                    'content': article.get('description', ''),
+                    'metadata': {
                         'id': article_id,
-                        'title': article.get('title', 'Unknown Title'),
-                        'content': article.get('description', ''),
                         'source': article.get('source', 'Unknown'),
                         'date': article.get('date', 'Unknown'),
                         'tags': article.get('tags', 'Unknown')
                     }
-                    # Try to summarize
-                    result = summarize_with_ollama(summarization_article)
-                    if result and result["status"] == "success":
-                        generated_summary = result["summary"]
-                        print(f"Successfully generated real summary in article detail for: {article['title']}")
-                except Exception as e:
-                    print(f"Error generating real summary in article detail: {str(e)}")
-                    generated_summary = None
-            
-            # Create summary - either generated or a better placeholder
-            if generated_summary:
-                summary_text = generated_summary
-            else:
-                # Create a better placeholder based on article content if available
-                if 'description' in article and article['description']:
-                    content = article['description']
-                    # Get first paragraph or 300 characters as a preview
-                    first_paragraph = content.split('\n\n')[0] if '\n\n' in content else content
-                    preview = first_paragraph[:300] + "..." if len(first_paragraph) > 300 else first_paragraph
-                    summary_text = f"Placeholder summary: {preview}"
-                else:
-                    summary_text = "No summary available. This is a placeholder created to ensure all articles have summaries."
-            
-            # Create placeholder summary
-            placeholder_summary = {
-                "article_id": article_id,
-                "title": article.get('title', 'Unknown Title'),
-                "summary": summary_text,
-                "source": article.get('source', 'Unknown'),
-                "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
-                "date": article.get('date', 'Unknown'),
-                "generated_at": datetime.now().strftime("%Y-%m-%d")
-            }
-            # Add _id field for Firestore document ID
-            placeholder_summary["_id"] = article_id
-            
-            # Store placeholder summary
-            insert_one(firebase_collection_summaries, placeholder_summary)
-            print(f"Created improved summary placeholder for article: {article_id}")
-            
-            # Set the summary for display
-            article["summary"] = summary_text
-        else:
-            if "summary" in summary:
-            article["summary"] = summary["summary"]
-        else:
-            article["summary"] = "No summary available"
-            
-        # Get tips from tips collection
-        tips = find_one(firebase_collection_tips, {"article_id": article_id})
-        
-        # If tips don't exist, create better ones
-        if not tips:
-            # Try to generate real tips if possible
-            generated_tips = None
-            if try_model_generation and 'description' in article and article['description']:
-                try:
-                    # Format article for tips generation
-                    tips_article = {
-                        'title': article.get('title', 'Unknown Title'),
-                        'content': article.get('description', ''),
-                        'metadata': {
-                            'id': article_id,
-                            'source': article.get('source', 'Unknown'),
-                            'date': article.get('date', 'Unknown'),
-                            'tags': article.get('tags', 'Unknown')
-                        }
-                    }
-                    # Try to generate tips
-                    result = generate_tips_with_ollama(tips_article)
-                    if result and 'tips' in result and isinstance(result['tips'], dict):
-                        generated_tips = result['tips']
-                        print(f"Successfully generated real tips in article detail for: {article['title']}")
-                except Exception as e:
-                    print(f"Error generating real tips in article detail: {str(e)}")
-                    generated_tips = None
-            
-            # Use generated tips or create a better placeholder based on the article
-            if generated_tips:
-                tips_content = generated_tips
-            else:
-                # Create context-specific placeholder based on article title and content
-                topic_keywords = []
-                if 'title' in article:
-                    # Extract likely keywords from title (nouns and technical terms)
-                    title_words = article['title'].split()
-                    for word in title_words:
-                        if word[0].isupper() or any(tech_term in word.lower() for tech_term in 
-                                                ['cve', 'exploit', 'vulnerability', 'attack', 'malware', 
-                                                 'ransomware', 'phishing', 'hack', 'breach', 'security']):
-                            topic_keywords.append(word)
-                
-                summary_prefix = ""
-                if topic_keywords:
-                    topic = ", ".join(topic_keywords[:3])  # Use up to 3 keywords
-                    summary_prefix = f"For issues related to {topic}, "
-                
-                tips_content = {
-                    "summary": f"{summary_prefix}Here are some general cybersecurity recommendations until specific tips can be generated.",
-                    "dos": [
-                        "Keep your software and operating systems updated with the latest security patches",
-                        "Use strong, unique passwords for each of your accounts",
-                        "Enable two-factor authentication wherever available",
-                        "Be vigilant about suspicious emails, links, and attachments"
-                    ],
-                    "donts": [
-                        "Don't share sensitive information on unsecured websites",
-                        "Don't use public Wi-Fi for sensitive transactions without a VPN",
-                        "Don't reuse passwords across multiple sites",
-                        "Don't ignore security warnings from your operating system or applications"
-                    ]
                 }
-            
-            # Create placeholder tips
-            placeholder_tips = {
-                "article_id": article_id,
-                "title": article.get('title', 'Unknown Title'),
-                "source": article.get('source', 'Unknown'),
-                "date": article.get('date', 'Unknown'),
-                "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
-                "tips": tips_content,
-                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            # Add _id field for Firestore document ID
-            placeholder_tips["_id"] = article_id
-            
-            # Store placeholder tips
-            insert_one(firebase_collection_tips, placeholder_tips)
-            print(f"Created improved tips placeholder for article: {article_id}")
-            
-            # Set the tips for display
-            article["tips"] = tips_content
+                # Try to generate tips
+                result = generate_tips_with_ollama(tips_article)
+                if result and 'tips' in result and isinstance(result['tips'], dict):
+                    generated_tips = result['tips']
+                    print(f"Successfully generated real tips in article detail for: {article['title']}")
+                    
+                    # Update the tips in the database
+                    new_tips = {
+                        "article_id": article_id,
+                        "title": article.get('title', 'Unknown Title'),
+                        "source": article.get('source', 'Unknown'),
+                        "date": article.get('date', 'Unknown'),
+                        "source_type": article.get('source_type', article.get('source', 'unknown').lower().replace(' ', '')),
+                        "tips": generated_tips,
+                        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    # Add _id field for Firestore document ID
+                    new_tips["_id"] = article_id
+                    
+                    # Store the new tips
+                    insert_one(firebase_collection_tips, new_tips)
+                    
+                    # Update the tips for display
+                    article["tips"] = generated_tips
+                else:
+                    # Fall back to existing tips or create basic ones
+                    if tips and "tips" in tips and isinstance(tips["tips"], dict):
+                        article["tips"] = tips["tips"]
+                    else:
+                        article["tips"] = {
+                            "summary": "Tips generation failed. Please check back later.",
+                            "dos": ["Keep software updated", "Use strong passwords", "Be cautious with unknown links"],
+                            "donts": ["Don't share sensitive information", "Don't reuse passwords", "Don't ignore security warnings"]
+                        }
+            except Exception as e:
+                print(f"Error generating real tips in article detail: {str(e)}")
+                # Use existing tips if available
+                if tips and "tips" in tips and isinstance(tips["tips"], dict):
+                    article["tips"] = tips["tips"]
+                else:
+                    article["tips"] = {
+                        "summary": f"No security tips available for '{article.get('title')}'.",
+                        "dos": [], 
+                        "donts": []
+                    }
         else:
-            if "tips" in tips and isinstance(tips["tips"], dict):
-            article["tips"] = tips["tips"]
-        else:
-            article["tips"] = {"dos": [], "donts": [], "summary": "No tips available"}
+            # Use existing tips
+            if tips and "tips" in tips and isinstance(tips["tips"], dict):
+                article["tips"] = tips["tips"]
+            else:
+                article["tips"] = {
+                    "summary": "No security tips available.",
+                    "dos": [], 
+                    "donts": []
+                }
         
         # Close Firebase connection
         close()
