@@ -1,22 +1,23 @@
-# CyberSaathi v2.0
+# CyberSaathi v3 - Cybersecurity Intelligence System
 
-CyberSaathi is a cybersecurity news aggregation, analysis, and presentation system that provides actionable insights for security professionals.
+CyberSaathi is an AI-powered cybersecurity intelligence system that scrapes cybersecurity articles from multiple sources, generates AI-powered summaries and CISO tips, and provides a web interface for viewing the processed content.
 
 ## Features
 
-- **Web Scraping:** Collects the latest cybersecurity articles from trusted sources like The Hacker News and CyberNews.
-- **AI-Powered Analysis:** Uses LLama 3.2 3b to generate summaries and actionable security tips.
-- **Firebase Firestore Integration:** Stores all scraped data and AI-generated content for future reference.
-- **Web Interface:** Visualizes all content in a clean, organized dashboard.
+- **Multi-Source Web Scraping:** Collects cybersecurity articles from The Hacker News and Cyber News using Selenium WebDriver
+- **AI-Powered Summarization:** Uses Ollama's llama3.2:1b model to generate concise article summaries
+- **CISO Tips Generation:** Creates actionable security recommendations (Do's and Don'ts) for each article
+- **Firebase Firestore Integration:** Stores all scraped data, summaries, and tips in Firebase Firestore
+- **Web Interface:** Clean Flask-based dashboard to view articles, summaries, and security tips
+- **Unified Workflow:** Single command execution of the entire pipeline from scraping to web interface
+- **Flexible CLI Options:** Skip specific steps, set limits, use existing files, and more
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
-
-1. Python 3.7 or higher
-2. Firebase project with Firestore enabled
-3. Ollama with llama3.2:3b model installed
-4. Chrome/Chromium browser with ChromeDriver for web scraping
+1. **Python 3.8+** (tested with Python 3.12)
+2. **Firebase Project** with Firestore enabled
+3. **Ollama** with llama3.2:1b model installed and running
+4. **Chrome/Chromium Browser** with ChromeDriver for web scraping
 
 ### Firebase Setup
 
@@ -27,24 +28,38 @@ CyberSaathi is a cybersecurity news aggregation, analysis, and presentation syst
 5. Click "Generate new private key" and download the JSON file
 6. Keep this file secure - it contains sensitive credentials
 
+### Ollama Setup
+
+1. Install Ollama from [https://ollama.ai/](https://ollama.ai/)
+2. Pull the required model:
+   ```bash
+   ollama pull llama3.2:1b
+   ```
+3. Start Ollama service:
+   ```bash
+   ollama serve
+   ```
+
 ### Installation
 
 1. Clone the repository
 2. Install required packages:
-   ```
+   ```bash
    pip install -r requirements.txt
    ```
 3. Set up your Firebase connection:
-   - Copy `.env.template` to `.env`:
+   - Create a `.env` file in the project root
+   - Add your Firebase service account JSON file path:
      ```
-     cp .env.template .env
+     FIREBASE_SERVICE_ACCOUNT=path/to/your/firebase-service-account.json
+     FIREBASE_COLLECTION_NEWS=news
+     FIREBASE_COLLECTION_TIPS=tips
+     FIREBASE_COLLECTION_SUMMARIES=summaries
      ```
-   - Edit the `.env` file and update `FIREBASE_SERVICE_ACCOUNT` with the path to your Firebase service account JSON file
 4. Test the Firebase connection:
-   ```
+   ```bash
    python test_firebase_storage.py
    ```
-   This will verify that your Firebase credentials are working correctly.
 
 ## Troubleshooting Firebase Connection
 
@@ -66,49 +81,113 @@ Run the complete pipeline (scraping, summarization, CISO tips generation, and we
 python main.py
 ```
 
-### Options
+### Command Line Options
 
-- `--limit N`: Set maximum number of articles to scrape from each source (default: 3)
-- `--skip-scrape`: Skip the scraping step and use existing files
-- `--skip-summaries`: Skip the article summarization step
+- `--limit N`: Limit number of articles to scrape (default: 10)
+- `--skip-scrape`: Skip the scraping step and use existing markdown
+- `--input-file FILE`: Use this markdown file instead of scraping
+- `--summary-file FILE`: Use this summary file instead of generating new summaries
+- `--skip-summaries`: Skip the summarization step
 - `--skip-tips`: Skip the CISO tips generation step
 - `--skip-storage`: Skip storing data in Firebase Firestore
 - `--skip-web`: Skip launching the web interface
-- `--web-port N`: Set the port for the web interface (default: 5000)
+- `--cli-view`: View summaries and tips in CLI instead of web
 - `--verbose`: Show detailed output
+- `--web-port N`: Port to run the web interface on (default: 5000)
 
-### Web Interface Only
+### Individual Components
 
-To just launch the web interface without running the whole pipeline:
-
-```
+**Launch Web Interface Only:**
+```bash
 python launch_web_interface.py
+```
+
+**Run Scraper Only:**
+```bash
+python Scraper.py
+```
+
+**Export Articles to Markdown:**
+```bash
+python export_to_markdown.py
+```
+
+**Query Stored Articles:**
+```bash
+python query_articles.py
+```
+
+**Query Stored Tips:**
+```bash
+python query_tips.py
 ```
 
 The web interface will be available at http://localhost:5000 by default.
 
-## Components
+## Project Structure
 
-1. **Scraper.py**: Scrapes articles from cybersecurity news websites
-2. **article_summarizer.py**: Generates concise summaries of articles using LLama 3.2
-3. **ciso_tips_agent.py**: Creates actionable security tips from article content
-4. **main.py**: Orchestrates the entire workflow
-5. **web_interface.py**: Provides a browser-based dashboard for viewing content
-6. **store_tips_summaries.py**: Stores processed data in Firebase Firestore
-7. **launch_web_interface.py**: Launches just the web interface
-8. **firebase_helper.py**: Provides Firebase Firestore utilities that match MongoDB's interface
-9. **test_firebase_storage.py**: Tests Firebase connection and storage functionality
+### Core Components
+- **main.py**: Unified workflow orchestrator with animated CLI interface
+- **Scraper.py**: Web scraper for The Hacker News and Cyber News using Selenium
+- **article_summarizer.py**: AI-powered article summarization using Ollama llama3.2:1b
+- **ciso_tips_agent.py**: Generates actionable security tips (Do's and Don'ts)
+- **web_interface.py**: Flask-based web dashboard
+- **firebase_helper.py**: Firebase Firestore database utilities
+
+### Utility Scripts
+- **launch_web_interface.py**: Standalone web interface launcher
+- **export_to_markdown.py**: Export Firestore data to markdown format
+- **query_articles.py**: Query and search stored articles
+- **query_tips.py**: Query and search stored security tips
+- **store_tips_summaries.py**: Store processed data in Firebase
+- **test_firebase_storage.py**: Firebase connection testing
+
+### Data Management
+- **check_firebase_data.py**: Check Firebase data integrity
+- **fetch_firestore_data.py**: Fetch data from Firestore
+- **fix_firebase_data.py**: Fix and clean Firebase data
+- **update_firebase_data.py**: Update existing Firebase data
+
+### Web Templates
+- **cybersaathi-v2/templates/**: HTML templates for web interface
+  - **index.html**: Main dashboard
+  - **article_detail.html**: Article detail view
+  - **error.html**: Error page
 
 ## Firebase Collections
 
-The system uses several collections in Firebase Firestore:
+The system uses the following collections in Firebase Firestore:
 
-1. **hackernews**: Articles scraped from The Hacker News
-2. **cybernews**: Articles scraped from Cyber News
-3. **tips**: Security tips generated for each article
-4. **summaries**: Article summaries generated by the AI
+- **news** (or hackernews/cybernews): Scraped cybersecurity articles
+- **tips**: AI-generated security recommendations with Do's and Don'ts
+- **summaries**: AI-generated article summaries
 
-Each document in these collections will have a unique `_id` field that matches across collections.
+### Document Structure
+
+**Articles:**
+```json
+{
+  "_id": "unique_article_id",
+  "title": "Article Title",
+  "content": "Article content",
+  "url": "https://source-url.com",
+  "source": "The Hacker News",
+  "date": "2024-01-01",
+  "tags": "cybersecurity, malware"
+}
+```
+
+**Tips:**
+```json
+{
+  "article_id": "unique_article_id",
+  "tips": {
+    "summary": "Brief overview",
+    "dos": ["Do this", "Do that"],
+    "donts": ["Don't do this", "Don't do that"]
+  }
+}
+```
 
 ## Web Interface
 
@@ -120,35 +199,72 @@ The web interface provides three main views:
 
 Click on any article to see its full details, summary, and security tips.
 
-## Architecture
+## Workflow Architecture
 
 ```
-┌─────────────┐    ┌────────────────┐    ┌────────────┐
-│ Web Scraper │───▶│ Article Storage│───▶│ Summarizer │
-└─────────────┘    └────────────────┘    └────────────┘
-                                               │
-                                               ▼
-┌─────────────┐    ┌────────────────┐    ┌────────────┐
-│Web Interface│◀───│Firebase Storage│◀───│ CISO Tips  │
-└─────────────┘    └────────────────┘    └────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Web Scraper   │───▶│ Firebase Storage │───▶│  Summarization  │
+│ (Selenium)      │    │   (Firestore)    │    │ (Ollama LLM)    │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                                                         │
+                                                         ▼
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│ Web Interface   │◀───│ Firebase Storage │◀───│  CISO Tips      │
+│ (Flask)         │    │   (Firestore)    │    │ (Ollama LLM)    │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
+
+### Data Flow
+1. **Scraping**: Selenium WebDriver scrapes articles from news sites
+2. **Storage**: Articles stored in Firebase Firestore
+3. **Export**: Articles exported to markdown format
+4. **Summarization**: Ollama processes articles to create summaries
+5. **Tips Generation**: Ollama generates actionable security tips
+6. **Web Interface**: Flask serves processed content via web dashboard
+
+## Dependencies
+
+Key Python packages (see `requirements.txt`):
+- `firebase-admin==6.3.0` - Firebase Firestore integration
+- `requests==2.31.0` - HTTP requests
+- `beautifulsoup4==4.12.3` - HTML parsing
+- `selenium` - Web scraping (ChromeDriver required)
+- `ollama==0.1.7` - LLM integration
+- `flask==2.3.3` - Web interface
+- `colorama==0.4.6` - Terminal colors
+- `tqdm==4.66.2` - Progress bars
+
+## Output Files
+
+The system generates timestamped files:
+- `cybersecurity_articles_YYYYMMDD_HHMMSS.md` - Scraped articles
+- `article_summaries_YYYYMMDD_HHMMSS.md` - AI summaries
+- `ciso_tips_YYYYMMDD_HHMMSS.md` - Security recommendations
+
+## Troubleshooting
+
+**Ollama Issues:**
+- Ensure Ollama service is running: `ollama serve`
+- Check model is available: `ollama list`
+- Pull model if missing: `ollama pull llama3.2:1b`
+
+**Selenium Issues:**
+- Install ChromeDriver and ensure it's in PATH
+- Update Chrome browser to latest version
+- Check firewall/antivirus blocking browser automation
+
+**Firebase Issues:**
+- Verify service account JSON file path in `.env`
+- Check Firebase project has Firestore enabled
+- Ensure service account has proper permissions
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.
 
 ## Acknowledgments
 
-- LLama 3.2 for the AI capabilities
-- The Hacker News and CyberNews for the security content
-- Firebase Firestore for database support
-
-## Migration Notes
-
-CyberSaathi v2.0 has been fully migrated to use Firebase Firestore exclusively. All MongoDB references and dependencies have been removed from the codebase. The system now uses a unified storage system with Firebase Firestore for:
-
-1. Storing scraped articles 
-2. Storing AI-generated summaries
-3. Storing security tips and recommendations
-
-This change improves maintenance and consistency while reducing the dependencies required to run the system. 
+- **Ollama & LLama 3.2** for AI capabilities
+- **The Hacker News & CyberNews** for cybersecurity content
+- **Firebase Firestore** for cloud database
+- **Flask & Selenium** for web technologies 
